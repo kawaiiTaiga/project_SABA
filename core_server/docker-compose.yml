@@ -1,0 +1,24 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mcp-broker
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    container_name: mcp-bridge
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: mcp-broker
+      MQTT_PORT: "1883"
+      API_PORT: "8083"
+    ports:
+      - "8083:8083"
+    depends_on:
+      - mosquitto

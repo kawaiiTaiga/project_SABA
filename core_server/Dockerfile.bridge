@@ -1,0 +1,12 @@
+# Dockerfile.bridge
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY bridge_mcp.py /app/bridge_mcp.py
+
+RUN pip install --no-cache-dir "mcp[fastmcp]" fastapi uvicorn paho-mqtt requests
+
+ENV API_PORT=8083
+EXPOSE 8083
+
+CMD ["python", "-u", "bridge_mcp.py"]
