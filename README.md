@@ -11,7 +11,6 @@ Project Saba is an open-source toolkit for this experiment. Through this tool, w
 
 * **Core Server**: The integrated server (MQTT broker, MCP bridge) that handles communication between the LLM and devices.
 * **Device SDK**: A client library for microcontrollers (e.g., ESP32) to easily connect and communicate with the Core Server.
-* **Documents**: Our design philosophy and research notes.
 
 ---
 
