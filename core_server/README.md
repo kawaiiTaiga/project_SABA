@@ -1,103 +1,134 @@
-# MCP-BRIDGE
+# core_server
 
-A lightweight MQTT ↔ MCP Bridge for Project Saba. This gateway server connects LLMs with real-world sensors and actuators.
+**What is this?**  
+A single Dockerized **core server** that bundles:
+- an MQTT **broker** (Mosquitto) and
+- the **MCP bridge** (HTTP/SSE server exposing MCP resources/tools, proxying device assets)
 
----
+It’s the central piece that sits between your LLM and your sensors/actuators.
 
-## Overview
-
-MCP-BRIDGE acts as a translator between two worlds:
-
--   **MQTT Broker**: It communicates with IoT devices by collecting events and routing commands.
--   **MCP Server**: It exposes a standardized interface for LLMs (like Claude Desktop) to interact with the physical world.
--   **HTTP API**: It provides a FastAPI-based API for health checks, status monitoring, and serving assets.
-
-
-## Core Features
-
-- **Device Registry**: Collects announce/status messages to cache a list of available devices and their online status.
-- **Command Routing**: Matches an LLM's tool call to an MQTT command and pairs the eventual response using a request_id.
-- **Asset Proxy**: Proxies device-generated assets (e.g., camera images) over HTTP at `/assets/{request_id}`.
-- **MCP Server**: Exposes standardized tools and resources for any MCP-compatible client.
+- MQTT topics (devices ↔ core): `mcp/dev/<device_id>/{announce|status|events|cmd}`
+- HTTP API (LLM/operator ↔ core): health, device list, asset proxy
+- MCP endpoint (for Claude Desktop via `mcp-remote`): **SSE at `/sse`**
 
 ---
 
-## Quick Start
+## Run
 
 ### Prerequisites
-- Python 3.9+ (or Docker)
-- A running Mosquitto MQTT Broker (listening on port 1883)
+- Docker & Docker Compose
 
-### Running Locally
-
-**Start the MQTT Broker (if you don't have one running):**
-
+### Start
 ```bash
-docker run -it --rm -p 1883:1883 eclipse-mosquitto:2
+docker compose up -d --build
 ```
 
-**Start the Bridge Server:**
-
+### Verify
 ```bash
-pip install -r requirements.txt
-python bridge_mcp.py
+# Core alive
+curl http://localhost:8083/healthz
+
+# Known devices (empty until your device announces)
+curl http://localhost:8083/devices
+
+# Container logs
+docker logs -f mcp-broker   # mosquitto
+docker logs -f mcp-bridge   # MCP bridge
 ```
 
-**Check Health Status:**
+> Tip: If your device already runs, hit its `GET /reannounce` (if supported) to republish retained announce.
 
-```bash
-curl http://localhost:8080/healthz
+### Default ports
+- MQTT broker: `1883` (host → container)
+- Core HTTP/MCP: `8083` (host → container)
+
+Environment variables (optional):
+- `MQTT_HOST` (bridge→broker; default: `mcp-broker` inside compose network)
+- `MQTT_PORT` (default: `1883`)
+- `API_PORT`  (default: `8083`)
+
+---
+
+## Connect to Claude Desktop
+
+Claude Desktop talks MCP over **stdio**, so we use the official **`mcp-remote`** shim to connect stdio ⇄ SSE.
+
+### Option A (recommended): use `npx` (Node.js installed)
+**Windows example (absolute path avoids PATH issues):**
+```json
+{
+  "mcpServers": {
+    "saba-core": {
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": ["-y", "@modelcontextprotocol/cli", "http://localhost:8083/sse"]
+    }
+  }
+}
 ```
 
-> Note: If port 8080 is in use, the bridge will automatically attempt to use the next available port (8081, 8082, etc.).
+**macOS/Linux example:**
+```json
+{
+  "mcpServers": {
+    "saba-core": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/cli", "http://localhost:8083/sse"]
+    }
+  }
+}
+```
+
+> The base URL is **`http://localhost:8083/sse`**.  
+> `mcp-remote` will use `GET /sse` (event stream) and `POST /sse/messages` under the hood.
+
+### Option B: global install (no npx)
+```bash
+npm i -g @modelcontextprotocol/cli
+```
+```json
+{
+  "mcpServers": {
+    "saba-core": {
+      "command": "mcp-remote",
+      "args": ["http://localhost:8083/sse"]
+    }
+  }
+}
+```
 
 ---
 
-## API Endpoints
+## Quick usage (sanity checks)
 
-- `GET /healthz`: Returns the server's health status.
-- `GET /devices`: Returns a list of all registered devices.
-- `GET /devices/{device_id}`: Returns the details for a single device.
-- `GET /assets/{request_id}`: Proxies the first (or only) asset from a device's response.
-- `GET /assets/{request_id}/{index}`: Proxies an asset by its specific index.
+1) **Device shows up**  
+   Your device publishes `announce`/`status` to `mcp/dev/<device_id>/...`.
+   ```bash
+   curl http://localhost:8083/devices
+   ```
 
----
+2) **Tool call (from Claude)**  
+   In a Claude chat with `saba-core` enabled, ask it to call:
+   - `invoke(device_id="<your_id>", tool="capture_image", args={"quality":"mid","flash":false})`
+   - Or the convenience tool `capture_image(...)`
 
-## MCP Integration
-
-An LLM can use the following tools and resources provided by this server.
-
-### Tools
-- `invoke(device_id, tool, args)`: A general-purpose invoker for any device tool.
-- `capture_image(device_id, quality, flash)`: An example tool for capturing an image from a camera device.
-
-### Resources
-- `bridge://devices`: A list of all available devices.
-- `bridge://device/<id>`: Detailed information about a specific device.
-- `bridge://asset/<request_id>`: The result of an event, including any associated assets.
+3) **View asset**  
+   The tool result includes `result.assets[i].proxy_url`. Open it to see the image proxied by the core server.
 
 ---
 
-## Usage Scenario
+## Troubleshooting
 
-1. An ESP32-CAM connects to the MQTT broker and publishes an announce message.  
-2. MCP-BRIDGE receives the message and registers the camera in its device list.  
-3. The LLM calls the `capture_image` tool (e.g., with `quality=mid, flash=false`).  
-4. The bridge publishes a command to the appropriate MQTT `cmd` topic.  
-5. The ESP32-CAM captures an image and publishes the result to the `events` topic.  
-6. The bridge receives the event, matches it to the original request, and returns a response to the LLM that includes a `proxy_url` for the captured image.
-
----
-
-## Roadmap
-
-- [ ] Dynamic Tool Discovery: Automatically expose device tools to the LLM based on announce messages.  
-- [ ] Persistence: Save device and event history to a database.  
-- [ ] Security: Implement robust authentication and ACL for MQTT and MCP.  
-- [ ] Dashboard: A web UI for monitoring, orchestration, and workflow management.  
+- **Claude says “transport closed”**  
+  Make sure `http://localhost:8083/sse` returns **200** with `Content-Type: text/event-stream` and the connection stays open:
+  ```bash
+  curl -i http://localhost:8083/sse
+  ```
+- **No devices in `/devices`**  
+  Check broker logs (`docker logs -f mcp-broker`), and verify your device points to the host’s LAN IP: `1883`.  
+  Trigger a re-announce on the device if possible.
+- **Windows can’t find `npx`**  
+  Use the absolute path to `npx.cmd` as shown above, or install `@modelcontextprotocol/cli` globally and use `mcp-remote`.
 
 ---
 
-## Relation to Project Saba
-
-MCP-BRIDGE is a core component of Project Saba's Core Server, acting as the primary gateway that connects LLMs to physical sensors and actuators.
+That’s it. Start the core, point your device at MQTT, and connect Claude to `/sse`.
