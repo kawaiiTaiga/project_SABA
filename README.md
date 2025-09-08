@@ -40,4 +40,4 @@ We are trying to answer the following technical questions as we build this tool:
 This is currently a solo project.
 I welcome any ideas, technical questions, or collaboration proposals about Project Saba. Please feel free to reach out anytime.
 
-* **Email**: `your-email@example.com`
+* **Email**: `gyeongmingim478@gmail.com`
