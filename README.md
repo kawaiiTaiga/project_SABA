@@ -1,5 +1,5 @@
 # Project Saba
-<img src="[your_mascot_image_url_here](https://github.com/kawaiiTaiga/project_SABA/blob/main/src/sabachan.png)" alt="Project Saba Mascot" width="150">
+<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/src/sabachan.png" alt="Project Saba Mascot" width="150">
 
 LLMs are powerful, but they're still trapped in software. We wanted to make the process of connecting LLMs to actual hardware simpler and more open.
 
