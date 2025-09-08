@@ -1,6 +1,5 @@
 # Project Saba
-
-![Project Saba Mascot](https://github.com/kawaiiTaiga/project_SABA/blob/main/src/sabachan.png)
+<img src="[your_mascot_image_url_here](https://github.com/kawaiiTaiga/project_SABA/blob/main/src/sabachan.png)" alt="Project Saba Mascot" width="150">
 
 LLMs are powerful, but they're still trapped in software. We wanted to make the process of connecting LLMs to actual hardware simpler and more open.
 
@@ -27,8 +26,8 @@ We are trying to answer the following technical questions as we build this tool:
 ---
 
 ### Version History
-**v0.0 (Current)**
-A
+**v0.0**
+* A
 
 **v0.1 (Current)**
 * This is the initial version with the project's foundational structure.
