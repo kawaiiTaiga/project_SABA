@@ -60,7 +60,7 @@ Claude Desktop talks MCP over **stdio**, so we use the official **`mcp-remote`**
   "mcpServers": {
     "saba-core": {
       "command": "C:\\Program Files\\nodejs\\npx.cmd",
-      "args": ["-y", "@modelcontextprotocol/cli", "http://localhost:8083/sse"]
+      "args": ["-y", "mcp-remote", "http://localhost:8083/sse"]
     }
   }
 }
