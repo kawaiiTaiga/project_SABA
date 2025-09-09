@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Single-file MQTT <-> MCP Bridge (Docker-first, SSE enabled)
+Single-file MQTT <-> MCP Bridge (Improved with proper image handling)
 - MQTT ingest: mcp/dev/+/announce|status|events
 - In-memory DeviceStore
 - Command Router (request_id matching with timeout)
@@ -9,17 +9,21 @@ Single-file MQTT <-> MCP Bridge (Docker-first, SSE enabled)
 - SSE endpoint for MCP: /sse
 - MCP Server (FastMCP):
     tools:
-      - invoke(device_id, tool, args)              # generic invoker (recommended)
-      - capture_image(device_id, quality, flash)   # convenience alias (optional)
+      - invoke(device_id, tool, args)              # generic invoker (fallback)
+      - {tool_name}_{device_id}(...)               # dynamic device-specific tools
     resources:
       - bridge://devices
       - bridge://device/<device_id>
       - bridge://asset/<request_id>
 """
-import os, sys, json, time, uuid, threading, queue, requests, logging, socket
+import os, sys, json, time, uuid, threading, queue, requests, logging, socket, base64, io
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Union
 from http import HTTPStatus
+
+# FastMCP and MCP types
+from mcp.server.fastmcp import FastMCP, Context
+from mcp.types import ImageContent, TextContent, Resource
 
 # ---- STDERR-only logging (STDIO-safe)
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
@@ -43,6 +47,57 @@ ACTIVE_API_PORT: Optional[int] = None  # bound port (for proxy URL)
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+# ========= Dynamic Tool Registry =========
+class DynamicToolRegistry:
+    def __init__(self):
+        self._tools: Dict[str, Dict[str, Any]] = {}  # tool_key -> tool_info
+        self._lock = threading.Lock()
+        self._registered_funcs: Dict[str, Any] = {}  # tool_key -> registered function
+    
+    def register_device_tools(self, device_id: str, tools: List[Dict[str, Any]]):
+        """Register all tools for a device"""
+        with self._lock:
+            # Remove old tools for this device
+            old_keys = [k for k in self._tools.keys() if k.endswith(f"_{device_id}")]
+            for k in old_keys:
+                self._tools.pop(k, None)
+                self._registered_funcs.pop(k, None)
+            
+            # Add new tools
+            for tool in tools:
+                tool_name = tool.get("name", "")
+                if not tool_name:
+                    continue
+                    
+                tool_key = f"{tool_name}_{device_id}"
+                self._tools[tool_key] = {
+                    "device_id": device_id,
+                    "original_name": tool_name,
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {}),
+                    "tool_key": tool_key
+                }
+            
+            log(f"[TOOLS] registered {len(tools)} tools for device {device_id}")
+    
+    def get_tool_info(self, tool_key: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return self._tools.get(tool_key)
+    
+    def list_all_tools(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            return list(self._tools.values())
+    
+    def get_registered_function(self, tool_key: str) -> Optional[Any]:
+        with self._lock:
+            return self._registered_funcs.get(tool_key)
+    
+    def set_registered_function(self, tool_key: str, func: Any):
+        with self._lock:
+            self._registered_funcs[tool_key] = func
+
+tool_registry = DynamicToolRegistry()
+
 # ========= In-memory stores =========
 class DeviceStore:
     def __init__(self):
@@ -58,6 +113,10 @@ class DeviceStore:
             d["tools"] = msg.get("tools", [])
             d["last_announce"] = msg
             d["last_seen"] = now_iso()
+        
+        # Register dynamic tools
+        tools = msg.get("tools", [])
+        tool_registry.register_device_tools(device_id, tools)
 
     def update_status(self, device_id: str, msg: Dict[str, Any]):
         with self._lock:
@@ -176,6 +235,8 @@ def mqtt_thread():
 
         if leaf == "announce":
             device_store.upsert_announce(dev_id, payload)
+            # Register dynamic tools after device announcement
+            register_dynamic_tools_for_device(dev_id)
         elif leaf == "status":
             device_store.update_status(dev_id, payload)
         elif leaf == "events":
@@ -232,48 +293,51 @@ def publish_cmd(device_id: str, tool: str, args: Dict[str, Any],
                                               "message": f"no event for request_id={rid} within {timeout_ms}ms"},
                        "request_id": rid}
 
-# ========= Result normalization =========
-def normalize_event_response_for_client(resp: Dict[str, Any], api_port: int | None = None) -> Dict[str, Any]:
-    out = json.loads(json.dumps(resp))
-    rid = out.get("request_id")
-    result = out.setdefault("result", {})
-    text = result.get("text")
-    port = api_port or ACTIVE_API_PORT or API_PORT
+# ========= Image processing helper =========
+def fetch_and_convert_to_base64(url: str, timeout: int = 10) -> Optional[str]:
+    """Fetch image from URL and convert to base64"""
+    try:
+        # Add cache-busting parameter to ensure fresh image
+        cache_bust_url = f"{url}{'&' if '?' in url else '?'}t={int(time.time() * 1000)}"
+        response = requests.get(cache_bust_url, timeout=timeout)
+        response.raise_for_status()
+        b64_data = base64.b64encode(response.content).decode('utf-8')
+        log(f"[BASE64] Converted image to base64 ({len(b64_data)} chars)")
+        return b64_data
+    except Exception as e:
+        log(f"[BASE64] Failed to fetch/convert {url}: {e}")
+        return None
 
+def convert_response_to_content_list(resp: Dict[str, Any]) -> List[Union[ImageContent, TextContent]]:
+    """Convert device response to MCP content list"""
+    result = resp.get("result", {})
+    text = result.get("text", "")
     assets = result.get("assets", [])
-    proxy_assets = []
-    for i, a in enumerate(assets):
-        kind = str(a.get("kind", ""))
-        mime = str(a.get("mime", "application/octet-stream")).lower()
-        original = a.get("url")
-        entry = {
-            "asset_id": a.get("asset_id"),
-            "kind": kind,
-            "mime": mime,
-            "url": original
-        }
-        if rid:
-            entry["proxy_url"] = f"http://localhost:{port}/assets/{rid}/{i}"
-        proxy_assets.append(entry)
+    
+    content = []
+    
+    # Process images first
+    for asset in assets:
+        kind = str(asset.get("kind", ""))
+        mime = str(asset.get("mime", "application/octet-stream")).lower()
+        url = asset.get("url")
+        
+        if kind == "image" and mime.startswith("image/") and url:
+            b64_data = fetch_and_convert_to_base64(url)
+            if b64_data:
+                content.append(ImageContent(
+                    type="image",
+                    mimeType=mime,
+                    data=b64_data
+                ))
+    
+    # Add text content after images
+    if text:
+        content.append(TextContent(type="text", text=text))
+    
+    return content
 
-    result["assets"] = proxy_assets
-    out["ok"] = bool(out.get("ok", True))
-    out["summary"] = {
-        "has_text": bool(text),
-        "asset_count": len(proxy_assets),
-        "image_count": sum(1 for x in proxy_assets if x["mime"].startswith("image/")),
-    }
-    return out
-
-# ========= FastAPI (Asset Proxy + Simple REST + SSE mount) =========
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-import uvicorn
-
-# MCP (Python SDK)
-from mcp.server.fastmcp import FastMCP
-from mcp.types import Resource
-
+# ========= FastMCP Server =========
 mcp = FastMCP("bridge-mcp")
 
 # ---- Resources ----
@@ -284,7 +348,7 @@ def res_devices() -> Resource:
         name="devices",
         description="Known devices with latest announce/status",
         mimeType="application/json",
-        text=json.dumps(device_store.list())
+        text=json.dumps(device_store.list(), indent=2)
     )
 
 @mcp.resource("bridge://device/{device_id}")
@@ -294,16 +358,16 @@ def res_device(device_id: str) -> Resource:
         return Resource(
             uri=f"bridge://device/{device_id}",
             name="device",
-            description="not found",
+            description="Device not found",
             mimeType="application/json",
             text=json.dumps({"error":"not found"})
         )
     return Resource(
         uri=f"bridge://device/{device_id}",
         name="device",
-        description="device detail",
+        description=f"Device {device_id} details",
         mimeType="application/json",
-        text=json.dumps(d)
+        text=json.dumps(d, indent=2)
     )
 
 @mcp.resource("bridge://asset/{request_id}")
@@ -314,38 +378,140 @@ def res_asset(request_id: str) -> Resource:
         return Resource(
             uri=f"bridge://asset/{request_id}",
             name="asset",
-            description="not found",
+            description="Asset not found",
             mimeType="application/json",
             text=json.dumps({"error":"not found"})
         )
     ev = rec["event"]
+    content_list = convert_response_to_content_list(ev)
     return Resource(
         uri=f"bridge://asset/{request_id}",
         name="asset",
-        description="event result",
+        description="Event result with assets",
         mimeType="application/json",
-        text=json.dumps(normalize_event_response_for_client(ev, api_port=ACTIVE_API_PORT))
+        text=json.dumps({"content": [c.__dict__ if hasattr(c, '__dict__') else str(c) for c in content_list]}, indent=2)
     )
 
-# ---- Tools ----
+# ---- Static Tools ----
 @mcp.tool()
-def invoke(device_id: str, tool: str, args: dict | None = None) -> dict:
+def invoke(device_id: str, tool: str, args: dict | None = None) -> List[Union[ImageContent, TextContent]]:
+    """Generic tool invoker (fallback for any device tool)"""
     args = args or {}
     ok, resp = publish_cmd(device_id, tool, args)
     if not ok:
-        return resp
-    return normalize_event_response_for_client(resp, api_port=ACTIVE_API_PORT)
+        error_msg = resp.get("error", {}).get("message", "Unknown error")
+        return [TextContent(type="text", text=f"Error: {error_msg}")]
+    
+    return convert_response_to_content_list(resp)
 
 @mcp.tool()
-def capture_image(device_id: str, quality: str = "mid", flash: bool = False) -> dict:
-    ok, resp = publish_cmd(device_id, "capture_image", {"quality": quality, "flash": bool(flash)})
-    if not ok:
-        return resp
-    return normalize_event_response_for_client(resp, api_port=ACTIVE_API_PORT)
+def list_devices() -> List[TextContent]:
+    """List devices from announce/status cache."""
+    devices = device_store.list()
+    device_summary = []
+    for device in devices:
+        status = "online" if device.get("online", False) else "offline"
+        tools_count = len(device.get("tools", []))
+        device_summary.append(f"• {device['device_id']}: {device.get('name', 'Unknown')} ({status}, {tools_count} tools)")
+    
+    summary_text = f"Found {len(devices)} devices:\n" + "\n".join(device_summary)
+    return [TextContent(type="text", text=summary_text)]
 
-# FastAPI app AFTER mcp so we can mount SSE
-app = FastAPI(title="Bridge MCP (Asset Proxy + SSE)")
-app.mount("/", mcp.sse_app())  # SSE transport for remote MCP clients
+@mcp.tool()
+def get_tools(device_id: str) -> List[TextContent]:
+    """List a device's announced tools."""
+    d = device_store.get(device_id)
+    if not d:
+        return [TextContent(type="text", text=f"Error: device_id '{device_id}' not found")]
+    
+    tools = d.get("tools", [])
+    if not tools:
+        return [TextContent(type="text", text=f"Device {device_id} has no announced tools")]
+    
+    tool_summary = []
+    for tool in tools:
+        name = tool.get("name", "unknown")
+        desc = tool.get("description", "")
+        tool_summary.append(f"• {name}: {desc}")
+    
+    summary_text = f"Device {device_id} tools ({len(tools)} total):\n" + "\n".join(tool_summary)
+    return [TextContent(type="text", text=summary_text)]
+
+# ---- Dynamic Tool Creation and Registration ----
+def create_dynamic_tool(tool_info: Dict[str, Any]):
+    """Create a dynamic tool function for a specific device tool"""
+    device_id = tool_info["device_id"]
+    original_name = tool_info["original_name"]
+    description = tool_info["description"]
+    parameters = tool_info.get("parameters", {})
+    
+    def dynamic_tool_func(**kwargs) -> List[Union[ImageContent, TextContent]]:
+        """Dynamically generated device tool function"""
+        args = dict(kwargs)
+        ok, resp = publish_cmd(device_id, original_name, args)
+        
+        if not ok:
+            error_msg = resp.get("error", {}).get("message", "Unknown error")
+            return [TextContent(type="text", text=f"Error: {error_msg}")]
+        
+        return convert_response_to_content_list(resp)
+    
+    # Set function metadata for FastMCP
+    tool_key = tool_info["tool_key"]
+    dynamic_tool_func.__name__ = tool_key
+    dynamic_tool_func.__doc__ = f"{description} (device: {device_id})"
+    
+    return dynamic_tool_func
+
+def register_dynamic_tools_for_device(device_id: str):
+    """Register dynamic tools for a specific device with FastMCP"""
+    device = device_store.get(device_id)
+    if not device or not device.get("tools"):
+        return
+    
+    log(f"[MCP] Registering dynamic tools for device {device_id}")
+    
+    for tool_info in device["tools"]:
+        tool_name = tool_info.get("name", "")
+        if not tool_name:
+            continue
+        
+        tool_key = f"{tool_name}_{device_id}"
+        
+        # Check if already registered
+        if tool_registry.get_registered_function(tool_key):
+            log(f"[MCP] Tool {tool_key} already registered, skipping")
+            continue
+        
+        try:
+            # Create tool info for registry
+            registry_tool_info = {
+                "device_id": device_id,
+                "original_name": tool_name,
+                "description": tool_info.get("description", f"{tool_name} on {device_id}"),
+                "parameters": tool_info.get("parameters", {}),
+                "tool_key": tool_key
+            }
+            
+            # Create dynamic function
+            dynamic_func = create_dynamic_tool(registry_tool_info)
+            
+            # Register with FastMCP
+            # Note: This registers the tool function directly
+            decorated_func = mcp.tool()(dynamic_func)
+            
+            # Store in registry for tracking
+            tool_registry.set_registered_function(tool_key, decorated_func)
+            
+            log(f"[MCP] Successfully registered dynamic tool: {tool_key}")
+            
+        except Exception as e:
+            log(f"[MCP] Failed to register tool {tool_key}: {e}")
+
+# ========= FastAPI App for Asset Proxy =========
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+import uvicorn
 
 def _proxy_stream(url: str, timeout=15):
     with requests.get(url, stream=True, timeout=timeout) as r:
@@ -354,12 +520,15 @@ def _proxy_stream(url: str, timeout=15):
             if chunk:
                 yield chunk
 
+# Create FastAPI app and mount MCP SSE
+app = FastAPI(title="Bridge MCP (Asset Proxy + SSE)")
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "ts": now_iso(), "port": ACTIVE_API_PORT or API_PORT}
 
 @app.get("/devices")
-def list_devices():
+def list_devices_api():
     return device_store.list()
 
 @app.get("/devices/{device_id}")
@@ -368,6 +537,11 @@ def device_detail(device_id: str):
     if not d:
         raise HTTPException(HTTPStatus.NOT_FOUND, "device not found")
     return d
+
+@app.get("/tools")
+def list_dynamic_tools():
+    """List all dynamically registered tools"""
+    return {"tools": tool_registry.list_all_tools()}
 
 @app.get("/assets/{request_id}")
 def asset_proxy_first(request_id: str):
@@ -400,6 +574,9 @@ def asset_proxy_indexed(request_id: str, index: int):
     if not url:
         raise HTTPException(HTTPStatus.BAD_REQUEST, "asset url missing")
     return StreamingResponse(_proxy_stream(url), media_type=mime)
+
+# Mount MCP SSE endpoint
+app.mount("/", mcp.sse_app())
 
 # ========= Main (Docker: just run uvicorn) =========
 def pick_free_port(base: int, tries: int) -> int | None:

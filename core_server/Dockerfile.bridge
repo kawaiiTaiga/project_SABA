@@ -1,12 +1,30 @@
-# Dockerfile.bridge
+# 최소 이미지
 FROM python:3.11-slim
 
+# 런타임 필수 패키지
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    paho-mqtt \
+    requests \
+    mcp \
+    fastmcp
+
+# 앱 배치
 WORKDIR /app
 COPY bridge_mcp.py /app/bridge_mcp.py
 
-RUN pip install --no-cache-dir "mcp[fastmcp]" fastapi uvicorn paho-mqtt requests
+# 기본 환경변수 (docker-compose에서 덮어쓸 수 있음)
+ENV MQTT_HOST=mcp-broker \
+    MQTT_PORT=1883 \
+    KEEPALIVE=60 \
+    API_PORT=8083 \
+    AUTO_PORT_FALLBACK=0 \
+    CMD_TIMEOUT_MS=8000 \
+    ASSET_TTL_SEC=600 \
+    DEBUG_SUB_ALL=0
 
-ENV API_PORT=8083
 EXPOSE 8083
 
+# uvicorn 실행 (bridge_mcp.py가 uvicorn.run 호출하므로 python 실행만 해도 됨)
 CMD ["python", "-u", "bridge_mcp.py"]
