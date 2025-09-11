@@ -3,7 +3,8 @@
 
 LLMs are powerful, but they're still trapped in software. We wanted to make the process of connecting LLMs to actual hardware simpler and more open.
 
-Project Saba is an open-source toolkit for this experiment. Through this tool, we aim to create **the most convenient intelligence**, where technology naturally blends into the background.
+Project SABA is an experimental framework that lets you plug-and-play real-world sensors and actuators into an LLM via the Model Context Protocol (MCP).
+Through this work, we aim to create **the most convenient intelligence**, where technology naturally blends into the background.
 
 ---
 
