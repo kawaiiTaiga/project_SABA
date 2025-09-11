@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Single-file MQTT <-> MCP Bridge (Improved with proper image handling)
+Single-file MQTT <-> MCP Bridge (Updated with Dynamic Tool Creation)
 - MQTT ingest: mcp/dev/+/announce|status|events
 - In-memory DeviceStore
 - Command Router (request_id matching with timeout)
@@ -10,7 +10,7 @@ Single-file MQTT <-> MCP Bridge (Improved with proper image handling)
 - MCP Server (FastMCP):
     tools:
       - invoke(device_id, tool, args)              # generic invoker (fallback)
-      - {tool_name}_{device_id}(...)               # dynamic device-specific tools
+      - {tool_name}_{device_id}(...)               # dynamic device-specific tools with proper schemas
     resources:
       - bridge://devices
       - bridge://device/<device_id>
@@ -24,6 +24,9 @@ from http import HTTPStatus
 # FastMCP and MCP types
 from mcp.server.fastmcp import FastMCP, Context
 from mcp.types import ImageContent, TextContent, Resource
+
+# Pydantic for dynamic model creation
+from pydantic import create_model, BaseModel
 
 # ---- STDERR-only logging (STDIO-safe)
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
@@ -256,11 +259,31 @@ threading.Thread(target=mqtt_thread, daemon=True).start()
 threading.Thread(target=asset_gc_thread, daemon=True).start()
 
 # ========= Publish helper =========
-def publish_cmd(device_id: str, tool: str, args: Dict[str, Any],
+def publish_cmd(device_id: str, tool: str, args: Any,
                 request_id: Optional[str]=None, timeout_ms: int=CMD_TIMEOUT_MS):
     rid = request_id or uuid.uuid4().hex
     topic = f"mcp/dev/{device_id}/cmd"
+    
+    # args 정규화 (모든 케이스 처리)
+    if isinstance(args, str):
+        # "quality=high,flash=on" 또는 "quality=high&flash=on" 형식
+        parsed_args = {}
+        separator = ',' if ',' in args else '&'
+        for pair in args.split(separator):
+            if '=' in pair:
+                key, value = pair.split('=', 1)
+                parsed_args[key.strip()] = value.strip()
+            elif ':' in pair:
+                key, value = pair.split(':', 1)
+                parsed_args[key.strip()] = value.strip()
+        args = parsed_args
+    elif isinstance(args, dict) and "kwargs" in args and len(args) == 1:
+        # {"kwargs": {...}} 형식
+        args = args["kwargs"]
+    
     payload = {"type":"device.command","tool":tool,"args":args,"request_id":rid}
+    log(f"[DEBUG] Publishing to {topic}: {json.dumps(payload, indent=2)}")
+    
     q = cmd_waiter.register(rid)
 
     if not device_store.get(device_id):
@@ -336,6 +359,42 @@ def convert_response_to_content_list(resp: Dict[str, Any]) -> List[Union[ImageCo
         content.append(TextContent(type="text", text=text))
     
     return content
+
+# ========= JSON Schema to Pydantic Model =========
+def json_schema_to_pydantic_model(name: str, schema: dict):
+    """JSON Schema를 Pydantic 모델로 변환"""
+    fields = {}
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+    
+    for prop_name, prop_schema in properties.items():
+        field_type = str  # 기본값
+        
+        # 타입 매핑
+        if prop_schema.get("type") == "integer":
+            field_type = int
+        elif prop_schema.get("type") == "number":
+            field_type = float
+        elif prop_schema.get("type") == "boolean":
+            field_type = bool
+        elif prop_schema.get("type") == "object":
+            field_type = dict
+        elif prop_schema.get("type") == "array":
+            field_type = list
+        elif prop_schema.get("type") == "string":
+            field_type = str
+        
+        # enum이 있으면 첫 번째 값을 기본값으로 사용
+        default_value = ...
+        if prop_name not in required:
+            if "enum" in prop_schema and prop_schema["enum"]:
+                default_value = prop_schema["enum"][0]
+            else:
+                default_value = None
+        
+        fields[prop_name] = (field_type, default_value)
+    
+    return create_model(name, **fields)
 
 # ========= FastMCP Server =========
 mcp = FastMCP("bridge-mcp")
@@ -438,33 +497,8 @@ def get_tools(device_id: str) -> List[TextContent]:
     return [TextContent(type="text", text=summary_text)]
 
 # ---- Dynamic Tool Creation and Registration ----
-def create_dynamic_tool(tool_info: Dict[str, Any]):
-    """Create a dynamic tool function for a specific device tool"""
-    device_id = tool_info["device_id"]
-    original_name = tool_info["original_name"]
-    description = tool_info["description"]
-    parameters = tool_info.get("parameters", {})
-    
-    def dynamic_tool_func(**kwargs) -> List[Union[ImageContent, TextContent]]:
-        """Dynamically generated device tool function"""
-        args = dict(kwargs)
-        ok, resp = publish_cmd(device_id, original_name, args)
-        
-        if not ok:
-            error_msg = resp.get("error", {}).get("message", "Unknown error")
-            return [TextContent(type="text", text=f"Error: {error_msg}")]
-        
-        return convert_response_to_content_list(resp)
-    
-    # Set function metadata for FastMCP
-    tool_key = tool_info["tool_key"]
-    dynamic_tool_func.__name__ = tool_key
-    dynamic_tool_func.__doc__ = f"{description} (device: {device_id})"
-    
-    return dynamic_tool_func
-
 def register_dynamic_tools_for_device(device_id: str):
-    """Register dynamic tools for a specific device with FastMCP"""
+    """Register dynamic tools for a specific device with FastMCP using proper schemas"""
     device = device_store.get(device_id)
     if not device or not device.get("tools"):
         return
@@ -484,23 +518,41 @@ def register_dynamic_tools_for_device(device_id: str):
             continue
         
         try:
-            # Create tool info for registry
-            registry_tool_info = {
-                "device_id": device_id,
-                "original_name": tool_name,
-                "description": tool_info.get("description", f"{tool_name} on {device_id}"),
-                "parameters": tool_info.get("parameters", {}),
-                "tool_key": tool_key
-            }
+            # ESP32-CAM의 parameters를 Pydantic 모델로 변환
+            schema = tool_info.get("parameters", {})
+            if not schema or schema.get("type") != "object":
+                log(f"[MCP] Skipping tool {tool_key}: invalid or missing schema")
+                continue
             
-            # Create dynamic function
-            dynamic_func = create_dynamic_tool(registry_tool_info)
+            ParamModel = json_schema_to_pydantic_model(f"{tool_key}_params", schema)
             
-            # Register with FastMCP
-            # Note: This registers the tool function directly
+            # 동적 함수 생성 클로저
+            def create_tool_func(device_id_copy, tool_name_copy, tool_key_copy, param_model):
+                def tool_func(params: param_model) -> List[Union[ImageContent, TextContent]]:
+                    """Dynamically generated device tool function with proper schema"""
+                    args = params.dict()  # Pydantic 모델을 dict로 변환
+                    log(f"[DYNAMIC_TOOL] {tool_key_copy} called with args: {json.dumps(args, indent=2)}")
+                    ok, resp = publish_cmd(device_id_copy, tool_name_copy, args)
+                    
+                    if not ok:
+                        error_msg = resp.get("error", {}).get("message", "Unknown error")
+                        return [TextContent(type="text", text=f"Error: {error_msg}")]
+                    
+                    return convert_response_to_content_list(resp)
+                
+                # 함수 메타데이터 설정
+                tool_func.__name__ = tool_key_copy
+                tool_func.__doc__ = tool_info.get("description", f"{tool_name_copy} on {device_id_copy}")
+                
+                return tool_func
+            
+            # 동적 함수 생성
+            dynamic_func = create_tool_func(device_id, tool_name, tool_key, ParamModel)
+            
+            # FastMCP에 등록
             decorated_func = mcp.tool()(dynamic_func)
             
-            # Store in registry for tracking
+            # 레지스트리에 저장
             tool_registry.set_registered_function(tool_key, decorated_func)
             
             log(f"[MCP] Successfully registered dynamic tool: {tool_key}")
