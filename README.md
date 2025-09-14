@@ -42,3 +42,6 @@ This is currently a solo project.
 I welcome any ideas, technical questions, or collaboration proposals about Project Saba. Please feel free to reach out anytime.
 
 * **Email**: `gyeongmingim478@gmail.com`
+---
+### License
+This project is licensed under the Apache License 2.0. See the LICENSE file for more details.
