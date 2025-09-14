@@ -1,5 +1,5 @@
 
-# 🦀 Project SABA Hardware SDK
+# Project SABA Hardware SDK
 
 A lightweight SDK for the hardware devices of `project_SABA`.
 
@@ -7,19 +7,19 @@ This SDK is the core framework that enables hardware devices to operate on comma
 
 <br>
 
-## ✨ Key Features
+## Key Features
 
-* **🔌 Easy Initial Setup**: On the first boot, the device automatically enters Access Point (AP) mode. Users can easily connect to it and configure Wi-Fi and MQTT server settings through a web browser. Once configured, the device reboots and connects to the network automatically.
+* **Easy Initial Setup**: On the first boot, the device automatically enters Access Point (AP) mode. Users can easily connect to it and configure Wi-Fi and MQTT server settings through a web browser. Once configured, the device reboots and connects to the network automatically.
 
-* **🌐 Robust Runtime Environment**:
+* **Robust Runtime Environment**:
     * **HTTP Server**: Provides a web interface to check the device's status, perform a factory reset, or clear retained MQTT messages.
     * **MQTT Client**: Publishes `announce` (device info), `status`, and `events` (results) topics, while subscribing to the `command` topic to receive remote instructions.
 
-* **🔧 Flexible Tool Framework**: Easily add new hardware functionalities (like sensors or actuators) by inheriting the `ITool` interface. The results from any `Tool` are always published as a standard `observation` event, ensuring consistency.
+* **Flexible Tool Framework**: Easily add new hardware functionalities (like sensors or actuators) by inheriting the `ITool` interface. The results from any `Tool` are always published as a standard `observation` event, ensuring consistency.
 
 <br>
 
-## 🛠️ Implementing Your Own Tool
+## Implementing Your Own Tool
 
 Adding new hardware functionality is very straightforward. You only need to modify three files:
 
@@ -30,7 +30,7 @@ Adding new hardware functionality is very straightforward. You only need to modi
 3.  **`modules/tool_register.cpp`**
     * Register your newly created `Tool` with the `ToolRegistry`.
 
-> **⚠️ Important**: The function signature for `register_tools` within `tool_register.cpp` must be maintained and defined only once within the project.
+> **Important**: The function signature for `register_tools` within `tool_register.cpp` must be maintained and defined only once within the project.
 >
 > ```cpp
 > void register_tools(ToolRegistry& reg, const ToolConfig& cfg);
@@ -38,7 +38,7 @@ Adding new hardware functionality is very straightforward. You only need to modi
 
 <br>
 
-## 🚀 Getting Started
+## Getting Started
 
 ### **Development Environment**
 
@@ -67,21 +67,25 @@ lib_deps =
 
 <br>
 
-## 📝 Status & Roadmap
+## Status & Roadmap
 
   * **Current Version**: `v0.1`
       * [✔] Core framework complete: Provisioning, runtime, MQTT/HTTP, and Tool system.
       * [✔] Basic `Tool` example included.
   * **Future Plans**:
       * [ ] Add more examples for various sensors and actuators.
+      * [ ] Introduce security enhancements (e.g., secure provisioning, MQTT over TLS).
+      * [ ] Implement the Circuit Breaker pattern for system resilience.
       * [ ] Enhance documentation and user guides.
       * [ ] Focus on stability and code optimization.
+
 
 <br>
 
 ## 📜 License
 
 This project is licensed under the **Apache License 2.0**. Please see the `LICENSE` file for more details.
+
 
 
 
