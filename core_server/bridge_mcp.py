@@ -794,7 +794,8 @@ def register_all_announced_devices():
 
 # ========= FastAPI App for Asset Proxy (Updated) =========
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 def _proxy_stream(url: str, timeout=15):
@@ -806,6 +807,397 @@ def _proxy_stream(url: str, timeout=15):
 
 # Create FastAPI app and mount MCP SSE
 app = FastAPI(title="Bridge MCP (Asset Proxy + SSE + Projection Layer)")
+
+@app.get("/", response_class=HTMLResponse)
+def projection_manager():
+    """Projection Manager Web Interface"""
+    html_content = """<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Bridge - Projection Manager</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%); color: white; padding: 20px; text-align: center; }
+        .header h1 { font-size: 2em; margin-bottom: 10px; }
+        .status-badge { display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 0.9em; font-weight: bold; }
+        .status-online { background: #27ae60; }
+        .status-offline { background: #e74c3c; }
+        .main-content { padding: 30px; }
+        .section { margin-bottom: 30px; border: 1px solid #e0e0e0; border-radius: 10px; overflow: hidden; }
+        .section-header { background: #f8f9fa; padding: 15px 20px; border-bottom: 1px solid #e0e0e0; font-weight: bold; color: #333; }
+        .section-content { padding: 20px; }
+        .device-card { border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px; overflow: hidden; }
+        .device-header { background: #f1f3f4; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
+        .device-info h3 { color: #333; margin-bottom: 5px; }
+        .device-id { color: #666; font-size: 0.9em; font-family: monospace; }
+        .device-status { display: flex; align-items: center; gap: 10px; }
+        .device-tools { padding: 15px; background: #fafafa; }
+        .tool-item { background: white; border: 1px solid #e0e0e0; border-radius: 5px; padding: 10px; margin-bottom: 10px; }
+        .tool-controls { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 10px; align-items: center; margin-top: 10px; }
+        .form-group { display: flex; flex-direction: column; }
+        .form-group label { font-size: 0.8em; color: #666; margin-bottom: 3px; }
+        input[type="text"], textarea, select { padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em; }
+        input[type="checkbox"] { transform: scale(1.2); }
+        .btn { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.3s ease; }
+        .btn-primary { background: #3498db; color: white; }
+        .btn-primary:hover { background: #2980b9; }
+        .btn-success { background: #27ae60; color: white; }
+        .btn-success:hover { background: #219a52; }
+        .btn-warning { background: #f39c12; color: white; }
+        .btn-warning:hover { background: #e67e22; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-danger:hover { background: #c0392b; }
+        .actions { display: flex; gap: 15px; margin-top: 30px; justify-content: center; }
+        .loading { display: none; text-align: center; padding: 20px; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .alert { padding: 15px; border-radius: 5px; margin-bottom: 20px; display: none; }
+        .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .alert-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .alert-warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>MCP Bridge - Projection Manager</h1>
+            <div id="status" class="status-badge status-offline">연결 확인 중...</div>
+        </div>
+        
+        <div class="main-content">
+            <div id="alert" class="alert"></div>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <div>데이터를 불러오는 중...</div>
+            </div>
+            
+            <div class="section">
+                <div class="section-header">장치 목록 및 Projection 설정</div>
+                <div class="section-content">
+                    <div id="devices-container"></div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <div class="section-header">글로벌 설정</div>
+                <div class="section-content">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <label><input type="checkbox" id="auto-enable-devices"> 새 장치 자동 활성화</label>
+                        <label><input type="checkbox" id="auto-enable-tools"> 새 도구 자동 활성화</label>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="actions">
+                <button class="btn btn-primary" onclick="loadData()">새로고침</button>
+                <button class="btn btn-success" onclick="saveConfig()">설정 저장</button>
+                <button class="btn btn-warning" onclick="reloadConfig()">설정 리로드</button>
+                <button class="btn btn-danger" onclick="restartContainer()">컨테이너 재시작</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';  // 같은 서버에서 제공되므로 상대 경로 사용
+        let currentConfig = {};
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            loadData();
+            setInterval(checkStatus, 5000);
+        });
+        
+        async function checkStatus() {
+            try {
+                const response = await fetch('/healthz');
+                const data = await response.json();
+                
+                const statusEl = document.getElementById('status');
+                if (response.ok && data.ok) {
+                    statusEl.textContent = '온라인';
+                    statusEl.className = 'status-badge status-online';
+                } else {
+                    statusEl.textContent = '오프라인';
+                    statusEl.className = 'status-badge status-offline';
+                }
+            } catch (error) {
+                const statusEl = document.getElementById('status');
+                statusEl.textContent = '연결 실패';
+                statusEl.className = 'status-badge status-offline';
+            }
+        }
+        
+        async function loadData() {
+            showLoading(true);
+            try {
+                const projectionResponse = await fetch('/projections');
+                const projectionData = await projectionResponse.json();
+                
+                const devicesResponse = await fetch('/devices');
+                const devicesData = await devicesResponse.json();
+                
+                currentConfig = projectionData.config;
+                renderDevices(devicesData, projectionData);
+                renderGlobalSettings();
+                
+                showAlert('데이터를 성공적으로 불러왔습니다.', 'success');
+            } catch (error) {
+                showAlert('데이터 로딩 실패: ' + error.message, 'error');
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        function renderDevices(devices, projectionData) {
+            const container = document.getElementById('devices-container');
+            container.innerHTML = '';
+            
+            devices.forEach(device => {
+                const deviceId = device.device_id;
+                const projection = currentConfig.devices[deviceId] || {};
+                
+                const deviceEl = document.createElement('div');
+                deviceEl.className = 'device-card';
+                deviceEl.innerHTML = `
+                    <div class="device-header">
+                        <div class="device-info">
+                            <h3>${device.name || deviceId}</h3>
+                            <div class="device-id">${deviceId}</div>
+                        </div>
+                        <div class="device-status">
+                            <span class="status-badge ${device.online ? 'status-online' : 'status-offline'}">
+                                ${device.online ? '온라인' : '오프라인'}
+                            </span>
+                            <label>
+                                <input type="checkbox" ${projection.enabled ? 'checked' : ''} 
+                                       onchange="updateDeviceEnabled('${deviceId}', this.checked)"> 활성화
+                            </label>
+                        </div>
+                    </div>
+                    <div class="device-tools">
+                        <div style="margin-bottom: 15px;">
+                            <label>장치 별칭:</label>
+                            <input type="text" value="${projection.device_alias || ''}" 
+                                   onchange="updateDeviceAlias('${deviceId}', this.value)"
+                                   placeholder="장치 표시 이름">
+                        </div>
+                        <div>
+                            <strong>도구 목록 (${device.tools?.length || 0}개):</strong>
+                            <div id="tools-${deviceId}">
+                                ${renderTools(deviceId, device.tools || [], projection.tools || {})}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(deviceEl);
+            });
+        }
+        
+        function renderTools(deviceId, tools, toolProjections) {
+            return tools.map(tool => {
+                const toolName = tool.name;
+                const projection = toolProjections[toolName] || {};
+                
+                return `
+                    <div class="tool-item">
+                        <div><strong>${toolName}</strong></div>
+                        <div style="font-size: 0.9em; color: #666; margin: 5px 0;">
+                            ${tool.description || '설명 없음'}
+                        </div>
+                        <div class="tool-controls">
+                            <div class="form-group">
+                                <label>활성화</label>
+                                <input type="checkbox" ${projection.enabled ? 'checked' : ''} 
+                                       onchange="updateToolEnabled('${deviceId}', '${toolName}', this.checked)">
+                            </div>
+                            <div class="form-group">
+                                <label>별칭</label>
+                                <input type="text" value="${projection.alias || ''}" 
+                                       onchange="updateToolAlias('${deviceId}', '${toolName}', this.value)"
+                                       placeholder="도구 표시 이름">
+                            </div>
+                            <div class="form-group">
+                                <label>설명 (override)</label>
+                                <input type="text" value="${projection.description || ''}" 
+                                       onchange="updateToolDescription('${deviceId}', '${toolName}', this.value)"
+                                       placeholder="커스텀 설명 (선택사항)">
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function renderGlobalSettings() {
+            const autoDevices = document.getElementById('auto-enable-devices');
+            const autoTools = document.getElementById('auto-enable-tools');
+            
+            autoDevices.checked = currentConfig.global?.auto_enable_new_devices || false;
+            autoTools.checked = currentConfig.global?.auto_enable_new_tools || false;
+        }
+        
+        function updateDeviceEnabled(deviceId, enabled) {
+            ensureDeviceExists(deviceId);
+            currentConfig.devices[deviceId].enabled = enabled;
+        }
+        
+        function updateDeviceAlias(deviceId, alias) {
+            ensureDeviceExists(deviceId);
+            currentConfig.devices[deviceId].device_alias = alias || null;
+        }
+        
+        function updateToolEnabled(deviceId, toolName, enabled) {
+            ensureDeviceExists(deviceId);
+            ensureToolExists(deviceId, toolName);
+            currentConfig.devices[deviceId].tools[toolName].enabled = enabled;
+        }
+        
+        function updateToolAlias(deviceId, toolName, alias) {
+            ensureDeviceExists(deviceId);
+            ensureToolExists(deviceId, toolName);
+            currentConfig.devices[deviceId].tools[toolName].alias = alias || null;
+        }
+        
+        function updateToolDescription(deviceId, toolName, description) {
+            ensureDeviceExists(deviceId);
+            ensureToolExists(deviceId, toolName);
+            currentConfig.devices[deviceId].tools[toolName].description = description || null;
+        }
+        
+        function ensureDeviceExists(deviceId) {
+            if (!currentConfig.devices) currentConfig.devices = {};
+            if (!currentConfig.devices[deviceId]) {
+                currentConfig.devices[deviceId] = {
+                    enabled: true,
+                    device_alias: null,
+                    tools: {}
+                };
+            }
+        }
+        
+        function ensureToolExists(deviceId, toolName) {
+            if (!currentConfig.devices[deviceId].tools[toolName]) {
+                currentConfig.devices[deviceId].tools[toolName] = {
+                    enabled: true,
+                    alias: null,
+                    description: null
+                };
+            }
+        }
+        
+        async function saveConfig() {
+            currentConfig.global = {
+                auto_enable_new_devices: document.getElementById('auto-enable-devices').checked,
+                auto_enable_new_tools: document.getElementById('auto-enable-tools').checked
+            };
+            
+            try {
+                showLoading(true);
+                const configJson = JSON.stringify(currentConfig, null, 2);
+                
+                const modal = document.createElement('div');
+                modal.style.cssText = `
+                    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    background: rgba(0,0,0,0.8); z-index: 1000;
+                    display: flex; align-items: center; justify-content: center;
+                `;
+                
+                modal.innerHTML = `
+                    <div style="background: white; padding: 30px; border-radius: 10px; max-width: 80%; max-height: 80%; overflow: auto;">
+                        <h3>설정 JSON (복사해서 projection_config.json에 저장하세요)</h3>
+                        <textarea style="width: 100%; height: 400px; font-family: monospace; font-size: 12px;" readonly>${configJson}</textarea>
+                        <div style="margin-top: 15px; text-align: center;">
+                            <button class="btn btn-primary" onclick="copyToClipboard('${configJson.replace(/'/g, "\\'")}')">클립보드에 복사</button>
+                            <button class="btn btn-secondary" onclick="this.closest('div').parentElement.remove()">닫기</button>
+                        </div>
+                    </div>
+                `;
+                
+                document.body.appendChild(modal);
+                showAlert('설정이 준비되었습니다. JSON을 복사해서 파일에 저장하세요.', 'warning');
+            } catch (error) {
+                showAlert('설정 저장 실패: ' + error.message, 'error');
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(function() {
+                showAlert('클립보드에 복사되었습니다!', 'success');
+            });
+        }
+        
+        async function reloadConfig() {
+            try {
+                showLoading(true);
+                const response = await fetch('/projections/reload', { method: 'POST' });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showAlert('설정이 리로드되었습니다. ' + data.message, 'success');
+                    await loadData();
+                } else {
+                    showAlert('설정 리로드 실패: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showAlert('설정 리로드 실패: ' + error.message, 'error');
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        async function restartContainer() {
+            if (!confirm('컨테이너를 재시작하시겠습니까? 이 작업은 PowerShell에서 수동으로 실행해야 합니다.')) {
+                return;
+            }
+            
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0,0,0,0.8); z-index: 1000;
+                display: flex; align-items: center; justify-content: center;
+            `;
+            
+            modal.innerHTML = `
+                <div style="background: white; padding: 30px; border-radius: 10px; max-width: 600px;">
+                    <h3>컨테이너 재시작 명령어</h3>
+                    <p>PowerShell에서 다음 명령어를 실행하세요:</p>
+                    <div style="background: #f4f4f4; padding: 15px; border-radius: 5px; font-family: monospace; margin: 15px 0;">
+                        docker compose restart bridge
+                    </div>
+                    <div style="text-align: center;">
+                        <button class="btn btn-primary" onclick="copyToClipboard('docker compose restart bridge')">명령어 복사</button>
+                        <button class="btn btn-secondary" onclick="this.closest('div').parentElement.remove()">닫기</button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+        }
+        
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+        
+        function showAlert(message, type) {
+            const alertEl = document.getElementById('alert');
+            alertEl.textContent = message;
+            alertEl.className = `alert alert-${type}`;
+            alertEl.style.display = 'block';
+            
+            setTimeout(() => {
+                alertEl.style.display = 'none';
+            }, 5000);
+        }
+    </script>
+</body>
+</html>"""
+    return html_content
 
 @app.get("/healthz")
 def healthz():
