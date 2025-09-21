@@ -6,7 +6,7 @@
 
 LLMs are transformative, but they remain confined to the digital realm. Project SABA is an experimental framework designed to break down this barrier, creating **a plug-and-play ecosystem where anyone can connect LLMs to real-world hardware** through the Model Context Protocol (MCP).
 
-Our vision is simple: just plug in your device, and it becomes instantly accessible to AI assistants like Claude Desktop. No complex setup, no deep technical knowledge required—just seamless integration between artificial intelligence and physical sensors, actuators, and IoT devices.
+Our vision is simple: just plug in your device, and it becomes instantly accessible to AI assistants. No complex setup, no deep technical knowledge required—just seamless integration between artificial intelligence and physical sensors, actuators, and IoT devices.
 
 ---
 
@@ -143,3 +143,4 @@ This project is licensed under the **Apache License 2.0**. See the [LICENSE](./L
 ---
 
 *Project SABA - Making AI-hardware integration as simple as plug and play.*
+
