@@ -23,7 +23,7 @@ It's the central hub that sits between your LLM and your sensors/actuators, with
 ```
 ┌─────────────────┐    MQTT     ┌─────────────────┐    MCP/SSE    ┌─────────────────┐
 │   IoT Devices   │ ◄─────────► │   Core Server   │ ◄───────────► │  Claude Desktop │
-│  (ESP32, etc.)  │   1883      │ (Bridge+Broker) │     8083      │   (mcp-remote)  │
+│ (Hardware SDK)  │   1883      │ (Bridge+Broker) │     8083      │   (mcp-remote)  │
 └─────────────────┘             └─────────────────┘               └─────────────────┘
                                          │
                                     HTTP │ 8084
@@ -92,6 +92,25 @@ docker logs -f mcp-projection-manager  # web interface
 
 ---
 
+## Device Development
+
+### Hardware SDK
+Use the official **Project SABA Hardware SDK** to build compatible IoT devices:
+- **Repository**: [Hardware SDK](https://github.com/kawaiiTaiga/project_SABA/tree/main/Device%20SDK)
+- **Platform**: PlatformIO with Wi-Fi capable microcontrollers (ESP32, etc.)
+- **Features**: Built-in provisioning, MQTT communication, tool registry system
+
+### Development Workflow
+1. Clone the Hardware SDK repository as a PlatformIO project
+2. Implement custom tools by inheriting the `ITool` interface
+3. Register your tools in the tool registry
+4. Build and upload to your microcontroller
+5. Configure device through automatic setup AP mode
+
+The Hardware SDK handles all MQTT protocol details and provides a clean framework for adding sensors, actuators, and other hardware capabilities. See the Hardware SDK documentation for detailed implementation guides and examples.
+
+---
+
 ## Tool Projection Management
 
 ### Web Interface (Recommended)
@@ -124,11 +143,6 @@ Projection settings are stored in `./config/projection_config.json`:
           "enabled": true,
           "alias": "take_photo",
           "description": "Take a photo with the living room camera"
-        },
-        "start_recording": {
-          "enabled": false,
-          "alias": null,
-          "description": null
         }
       }
     }
@@ -153,7 +167,7 @@ Claude Desktop uses MCP over **stdio**, so we use the official **`mcp-remote`** 
   "mcpServers": {
     "saba-core": {
       "command": "C:\\Program Files\\nodejs\\npx.cmd",
-      "args": ["-y", "@modelcontextprotocol/cli", "http://localhost:8083/sse/sse"]
+      "args": ["-y", "@modelcontextprotocol/cli", "http://localhost:8083/sse"]
     }
   }
 }
@@ -165,7 +179,7 @@ Claude Desktop uses MCP over **stdio**, so we use the official **`mcp-remote`** 
   "mcpServers": {
     "saba-core": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/cli", "http://localhost:8083/sse/sse"]
+      "args": ["-y", "@modelcontextprotocol/cli", "http://localhost:8083/sse"]
     }
   }
 }
@@ -180,7 +194,7 @@ npm i -g @modelcontextprotocol/cli
   "mcpServers": {
     "saba-core": {
       "command": "mcp-remote",
-      "args": ["http://localhost:8083/sse/sse"]
+      "args": ["http://localhost:8083/sse"]
     }
   }
 }
@@ -193,28 +207,11 @@ npm i -g @modelcontextprotocol/cli
 
 ## Quick Usage
 
-### 1. Device Registration
-When your IoT device starts, it should publish an announce message:
-```json
-// Topic: mcp/dev/esp32-cam-01/announce
-{
-  "name": "ESP32 Camera - Living Room",
-  "version": "1.0.0",
-  "tools": [
-    {
-      "name": "capture_image",
-      "description": "Capture an image with configurable quality and flash",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "quality": {"type": "string", "enum": ["low", "mid", "high"]},
-          "flash": {"type": "boolean"}
-        }
-      }
-    }
-  ]
-}
-```
+### 1. Device Setup
+Build your IoT device using the Hardware SDK. The device will automatically:
+- Create a setup AP on first boot for Wi-Fi/MQTT configuration
+- Announce its capabilities to the core server via MQTT
+- Appear in the Projection Manager web interface
 
 ### 2. Configure Tool Projection
 1. Open http://localhost:8084
@@ -229,22 +226,7 @@ In a Claude chat with `saba-core` enabled:
 - **Projected tool**: `take_photo_esp32_cam_01(quality="high", flash=true)` (if you set alias to "take_photo")
 
 ### 4. View Assets
-Device responses with images/files include `proxy_url` fields:
-```json
-{
-  "result": {
-    "text": "Image captured successfully",
-    "assets": [
-      {
-        "kind": "image",
-        "mime": "image/jpeg",
-        "url": "http://device-ip/image.jpg",
-        "proxy_url": "http://localhost:8083/assets/req_abc123/0"
-      }
-    ]
-  }
-}
-```
+Device responses with images/files include `proxy_url` fields that are automatically served through the core server.
 
 ---
 
@@ -279,33 +261,20 @@ Device responses with images/files include `proxy_url` fields:
 
 ## Development
 
-### Adding New Device Types
-1. Implement MCP-compatible MQTT protocol in your device
-2. Announce tools with proper JSON Schema parameters
-3. Handle commands via `mcp/dev/<device_id>/cmd` topic
-4. Return results with assets to `mcp/dev/<device_id>/events`
+### Extending the System
+- **New device types**: Use the Hardware SDK framework for consistent MQTT protocol implementation
+- **Custom projections**: Modify `projection_manager.py` for additional UI features
+- **Bridge extensions**: Update `bridge_mcp.py` for new MCP capabilities
 
-### Extending Projection Features
-- Modify `projection_manager.py` for new UI features
-- Update `bridge_mcp.py` for new projection logic
-- Configuration schema is in `ProjectionConfigManager` class
+### Hardware SDK Integration
+The core server is designed to work seamlessly with devices built using the Project SABA Hardware SDK. The SDK provides:
+- Automatic device provisioning and setup
+- Built-in tool registry system
+- Standardized MQTT communication protocol
+- Easy integration with sensors and actuators
 
-### Custom Tool Schemas
-Ensure your device tools use proper JSON Schema:
-```json
-{
-  "type": "object",
-  "properties": {
-    "param_name": {
-      "type": "string|number|boolean|array|object",
-      "enum": ["value1", "value2"],  // optional
-      "description": "Parameter description"
-    }
-  },
-  "required": ["required_param"]
-}
-```
+For detailed hardware development guides, examples, and API references, see the [Hardware SDK documentation](https://github.com/kawaiiTaiga/project_SABA/tree/main/Device%20SDK).
 
 ---
 
-That's it! Start the core, connect your devices via MQTT, configure projections via the web interface, and connect Claude Desktop to the SSE endpoint.
+That's it! Start the core server, build your devices with the Hardware SDK, configure projections through the web interface, and connect Claude Desktop to the SSE endpoint.
