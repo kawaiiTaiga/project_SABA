@@ -20,8 +20,26 @@ services:
       API_PORT: "8083"
       PROJECTION_CONFIG_PATH: /app/config/projection_config.json 
     ports:
-      - "8083:8083"
+      - "8083:8083"  # MCP SSE 전용
     depends_on:
       - mosquitto
     volumes:
-      - ./config:/app/config  # 이제 올바른 위치에 있음
+      - ./config:/app/config
+
+  projection-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.projection-manager
+    container_name: mcp-projection-manager
+    restart: unless-stopped
+    environment:
+      PROJECTION_CONFIG_PATH: /app/config/projection_config.json
+      BRIDGE_API_URL: http://bridge:8083
+      DOCKER_HOST: unix:///var/run/docker.sock
+    ports:
+      - "8084:8084"  # 웹 관리 인터페이스 전용
+    depends_on:
+      - bridge
+    volumes:
+      - ./config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker API 접근용
