@@ -47,7 +47,6 @@ The central hub that orchestrates everything. It includes an integrated MQTT bro
 - Asset proxying for handling images, files, and sensor data
 - Multi-language support and intuitive configuration
 
-**→ [Explore Core Server Documentation](./Core%20Server/)**
 
 ### 🔧 **Device SDK**
 A lightweight, PlatformIO-based library for microcontrollers (ESP32, etc.) that makes connecting hardware incredibly simple. The SDK provides:
@@ -57,7 +56,6 @@ A lightweight, PlatformIO-based library for microcontrollers (ESP32, etc.) that 
 - Standardized MQTT communication with the Core Server
 - Clean abstractions for sensors, actuators, and custom hardware
 
-**→ [Explore Device SDK Documentation](./Device%20SDK/)**
 
 ---
 
@@ -143,4 +141,5 @@ This project is licensed under the **Apache License 2.0**. See the [LICENSE](./L
 ---
 
 *Project SABA - Making AI-hardware integration as simple as plug and play.*
+
 
