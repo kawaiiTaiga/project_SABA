@@ -180,10 +180,9 @@ The Core Server's Projection Manager lets users:
 ## Examples & Templates
 
 The SDK includes example implementations for common device types:
-- **Sensor Devices**: Temperature, humidity, motion detection
-- **Actuator Devices**: Motors, servos, relays
+
 - **Camera Devices**: Image capture with configurable parameters
-- **Composite Devices**: Multi-function devices combining sensors and actuators
+
 
 Each example demonstrates semantic function design and best practices for LLM-native hardware development.
 
@@ -223,4 +222,5 @@ Licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file fo
 ---
 
 *Build hardware that speaks AI.*
+
 
