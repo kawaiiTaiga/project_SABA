@@ -15,14 +15,14 @@ Traditional IoT development forces you to think like hardware: define pins, set 
 **Instead of this:**
 ```cpp
 motor.rotate(50, CLOCKWISE, 100);  // How many degrees for a door?
-led.setRGB(255, 200, 150);         // What color temperature is this?
+led.setRGB(255, 200, 150);         // What LED is this for?
 sensor.readValue();                // Value for what purpose?
 ```
 
 **You define this:**
 ```cpp
 openLivingRoomDoor();             // Clear location and intent
-setCinematicLighting();           // Specific use case context
+setCinematicLighting(255, 200, 150);           // Specific use case context
 checkRoomComfort();               // Meaningful purpose
 ```
 
@@ -223,3 +223,4 @@ Licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file fo
 ---
 
 *Build hardware that speaks AI.*
+
