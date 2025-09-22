@@ -1,144 +1,225 @@
-# Project SABA
+# Project SABA - Hardware SDK
 
-<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/sabachan.png" alt="Project Saba Mascot" width="150">
+**Build LLM-native IoT devices with semantic function design.**
 
-**Bridging the gap between AI and the physical world.**
+The Hardware SDK is a lightweight framework for creating intelligent devices that speak naturally to AI assistants. Instead of exposing hardware primitives like "rotate motor X degrees," you define semantic functions like "open door" or "adjust lighting"—letting LLMs understand *what* your device does, not *how* it works.
 
-LLMs are transformative, but they remain confined to the digital realm. Project SABA is an experimental framework designed to break down this barrier, creating **a plug-and-play ecosystem where anyone can connect LLMs to real-world hardware** through the Model Context Protocol (MCP).
-
-Our vision is simple: just plug in your device, and it becomes instantly accessible to AI assistants. No complex setup, no deep technical knowledge required—just seamless integration between artificial intelligence and physical sensors, actuators, and IoT devices.
+This SDK handles all the complexity of network provisioning, MQTT communication, and protocol compliance, so you can focus on building meaningful device capabilities that AI can naturally understand and orchestrate.
 
 ---
 
-## The Vision
+## Design Philosophy
 
-We're building **the most accessible LLM-hardware ecosystem**—one where connecting a temperature sensor, camera, or smart light to an AI assistant is as simple as plugging in a USB device. Through standardized protocols and intuitive tools, we aim to democratize the creation of intelligent, responsive environments.
+Traditional IoT development forces you to think like hardware: define pins, set parameters, manage protocols. The SABA Hardware SDK flips this paradigm—you think like an AI assistant would.
 
-**What makes this different:**
-- **Zero-configuration hardware integration** via automatic device discovery
-- **LLM-native design philosophy** that prioritizes semantic meaning over low-level control  
-- **Visual management interface** for non-technical users
-- **Standardized communication protocols** that work across different device types
+**Instead of this:**
+```cpp
+motor.rotate(50, CLOCKWISE, 100);  // How many degrees for a door?
+led.setRGB(255, 200, 150);         // What color temperature is this?
+sensor.readValue();                // Value for what purpose?
+```
 
-### LLM-Native Hardware Design
+**You define this:**
+```cpp
+openLivingRoomDoor();             // Clear location and intent
+setCinematicLighting();           // Specific use case context
+checkRoomComfort();               // Meaningful purpose
+```
 
-Traditional IoT focuses on hardware-centric control: "rotate motor 50 degrees" or "set LED brightness to 75%". These schemas were designed for human developers, not AI reasoning.
-
-Project SABA takes a fundamentally different approach. Instead of exposing hardware primitives, we expose **semantic functions**: "open door", "adjust lighting", "check temperature". This allows LLMs to:
-
-- **Understand intent** rather than memorize commands
-- **Combine capabilities** in ways we never programmed
-- **Adapt to context** without rigid conditional logic
-- **Reason about outcomes** instead of just executing instructions
-
-The key insight: **naming matters more than parameters**. A well-named function like `create_cozy_ambiance()` tells the LLM everything it needs to know, while `set_rgb_values(r, g, b)` requires the LLM to become a lighting engineer.
-
-This semantic abstraction enables true AI-hardware integration, where the artificial intelligence can naturally reason about and orchestrate physical systems.
+The key insight: **function names are the interface**. When an LLM sees `createWarmAmbiance()`, it immediately understands the capability. When it sees `setRGB(r, g, b)`, it has to become a lighting engineer.
 
 ---
 
-## What's Inside
+## Key Features
 
-### 🏗️ **Core Server**
-The central hub that orchestrates everything. It includes an integrated MQTT broker and MCP bridge that handles seamless communication between AI assistants and your physical devices. Features include:
-
-- Real-time device discovery and registration
-- Web-based projection management for controlling device visibility
-- Asset proxying for handling images, files, and sensor data
-- Multi-language support and intuitive configuration
-
-
-### 🔧 **Device SDK**
-A lightweight, PlatformIO-based library for microcontrollers (ESP32, etc.) that makes connecting hardware incredibly simple. The SDK provides:
-
-- Automatic Wi-Fi provisioning through setup AP mode
-- Built-in tool registry system for defining device capabilities
-- Standardized MQTT communication with the Core Server
-- Clean abstractions for sensors, actuators, and custom hardware
-
+- **Automatic Network Provisioning**: First boot creates a setup AP—users configure Wi-Fi and MQTT through any web browser
+- **Semantic Tool Framework**: Define device capabilities as meaningful functions using the `ITool` interface
+- **Zero-Configuration Discovery**: Devices automatically announce their capabilities to the SABA Core Server
+- **Robust Runtime Environment**: Built-in HTTP server for status monitoring and MQTT client for reliable communication
+- **Standardized Results**: All tool outputs follow consistent JSON schemas that LLMs can easily interpret
 
 ---
 
-## Key Research Questions
+## Quick Start
 
-As we develop this framework, we're exploring fundamental questions about LLM-native hardware design:
+### Development Environment
+- **Framework**: [PlatformIO](https://platformio.org/) (only tested environment)
+- **Hardware**: Any Wi-Fi capable microcontroller (ESP32 recommended)
+- **Dependencies**: Minimal—just ArduinoJson and PubSubClient
 
-- **Semantic Hardware Abstraction**: How do we design device interfaces that communicate *purpose* rather than *mechanism*? What makes a function name instantly comprehensible to an LLM?
+### Setup
+1. **Add Dependencies** to your `platformio.ini`:
+   ```ini
+   lib_deps =
+       bblanchon/ArduinoJson@^7.0.4
+       knolleary/PubSubClient@^2.8
+   ```
 
-- **Contextual Device Orchestration**: How can LLMs naturally combine multiple devices to achieve complex goals without explicit programming? What abstractions enable emergent behaviors?
+2. **Clone the SDK** as your PlatformIO project base
 
-- **Adaptive Hardware Reasoning**: How do we move beyond conditional logic to systems where LLMs can reason about physical constraints, environmental context, and user intent simultaneously?
-
-- **Scalable Semantic Protocols**: What communication patterns allow diverse hardware to present unified, meaningful interfaces that LLMs can intuitively understand and combine?
+3. **Define Your Device Capabilities** by implementing the `ITool` interface
 
 ---
 
-## Getting Started
+## Building Your First Tool
 
-### Quick Setup
-1. **Deploy the Core Server** using Docker Compose
-2. **Build your first device** with the Hardware SDK
-3. **Configure device visibility** through the web interface
-4. **Connect Claude Desktop** to start interacting with your hardware
+Creating new device functionality requires modifying just three files:
 
-The entire process takes just minutes, not hours.
+### 1. Implement Logic (`modules/my_tool.cpp`)
+```cpp
+#include "my_tool.h"
 
-### Example Use Cases
-- **Smart home automation** with natural language control
-- **IoT sensor networks** with AI-driven analysis and responses  
-- **Robotics projects** with conversational control interfaces
-- **Environmental monitoring** with intelligent alert systems
-- **Educational projects** demonstrating AI-hardware integration
+JsonDocument MyTool::getSchema() {
+    JsonDocument schema;
+    schema["type"] = "object";
+    schema["properties"]["intensity"]["type"] = "string";
+    schema["properties"]["intensity"]["enum"] = JsonArray({"gentle", "normal", "bright"});
+    return schema;
+}
+
+JsonDocument MyTool::execute(const JsonDocument& args) {
+    String intensity = args["intensity"] | "normal";
+    
+    // Your hardware logic here
+    if (intensity == "gentle") {
+        analogWrite(LED_PIN, 64);
+    } else if (intensity == "bright") {
+        analogWrite(LED_PIN, 255);
+    } else {
+        analogWrite(LED_PIN, 128);
+    }
+    
+    JsonDocument result;
+    result["text"] = "Lighting adjusted to " + intensity + " intensity";
+    return result;
+}
+```
+
+### 2. Declare Interface (`modules/my_tool.h`)
+```cpp
+#pragma once
+#include "ITool.h"
+
+class MyTool : public ITool {
+public:
+    JsonDocument getSchema() override;
+    JsonDocument execute(const JsonDocument& args) override;
+};
+```
+
+### 3. Register Tool (`modules/tool_register.cpp`)
+```cpp
+#include "tool_register.h"
+#include "my_tool.h"
+
+void register_tools(ToolRegistry& reg, const ToolConfig& cfg) {
+    reg.addTool("adjust_lighting", std::make_unique<MyTool>());
+    // Add other tools here...
+}
+```
+
+**Critical**: The `register_tools` function signature must be maintained exactly as shown and defined only once per project.
+
+---
+
+## Deployment & Configuration
+
+### Initial Setup
+1. **Build and Upload** your project to the microcontroller
+2. **Connect to Setup Network**: Device creates `MCP-SETUP-XXXX` Wi-Fi AP on first boot
+3. **Configure via Browser**: Connect to the AP and enter your Wi-Fi credentials and MQTT server details
+4. **Automatic Operation**: Device reboots and connects to your network, announcing capabilities
+
+### Runtime Management
+Once operational, your device provides:
+- **Status Web Interface**: Check device health and configuration
+- **MQTT Communication**: Automatic announce/status publishing and command handling
+- **Factory Reset**: Web-based reset option for reconfiguration
+- **Retained Message Cleanup**: Clear persistent MQTT messages when needed
+
+---
+
+## Design Guidelines
+
+### Semantic Function Naming
+- **Include location context**: `openLivingRoomDoor()` vs `openDoor()`
+- **Specify use case**: `setCinematicLighting()` vs `setWarmLight()`
+- **Think user intent**: `checkRoomComfort()` vs `readTemperature()`
+- **Embed purpose**: `prepareMovieNight()` vs `dimLights()`
+
+When a user says "open the living room door," the LLM should immediately recognize `openLivingRoomDoor()`. When they say "set up for filming," it should find `setCinematicLighting()`. The function name should be the natural bridge between human language and device capability.
+
+### Result Structure
+Always return meaningful feedback:
+```cpp
+JsonDocument result;
+result["text"] = "Living room door opened successfully";
+result["assets"] = JsonArray();  // For images, files, etc.
+return result;
+```
+
+---
+
+## Integration with SABA Ecosystem
+
+### Automatic Discovery
+Your device automatically integrates with the SABA Core Server:
+1. **Announces capabilities** via MQTT on startup
+2. **Appears in Projection Manager** for configuration
+3. **Becomes available** to Claude Desktop and other MCP clients
+
+### Tool Projection
+The Core Server's Projection Manager lets users:
+- Enable/disable specific device functions
+- Set user-friendly aliases for tools
+- Control which capabilities are exposed to AI assistants
+- Override descriptions for better LLM understanding
+
+---
+
+## Examples & Templates
+
+The SDK includes example implementations for common device types:
+- **Sensor Devices**: Temperature, humidity, motion detection
+- **Actuator Devices**: Motors, servos, relays
+- **Camera Devices**: Image capture with configurable parameters
+- **Composite Devices**: Multi-function devices combining sensors and actuators
+
+Each example demonstrates semantic function design and best practices for LLM-native hardware development.
 
 ---
 
 ## Development Status
 
-### **v0.1** (Current Release)
-- ✅ Core Server with MQTT broker and MCP bridge
-- ✅ Web-based projection management interface
-- ✅ Hardware SDK with automatic provisioning
-- ✅ Tool registry system and standardized protocols
-- ✅ Asset proxying and real-time device discovery
+### Current Version: v0.1
+- Core framework with provisioning and runtime systems
+- Tool registry and MQTT communication
+- Basic examples and templates
+- Web-based configuration interface
 
-### **Upcoming Features**
-- 🔄 Enhanced security with TLS/SSL support
-- 🔄 Advanced event routing and filtering
-- 🔄 Plugin system for custom integrations
-- 🔄 Mobile companion app for device management
-- 🔄 Cloud deployment options and scaling guides
-
----
-
-## Philosophy
-
-We believe the future of AI lies not just in better models, but in better **integration** with the physical world. Project SABA represents our attempt to make that integration as natural and accessible as possible.
-
-Every design decision is guided by a simple principle: **if you can plug it in, AI should be able to use it.** This means prioritizing ease of use, clear abstractions, and reliable protocols over complex configurations or specialized knowledge requirements.
+### Planned Enhancements
+- Enhanced security with TLS/SSL support
+- Circuit breaker patterns for resilience
+- Extended sensor/actuator library
+- Advanced power management features
+- Comprehensive documentation and tutorials
 
 ---
 
-## Community & Contribution
+## Philosophy: Beyond Traditional IoT
 
-This is currently a solo research project, but we welcome collaborators, feedback, and contributions from anyone interested in AI-hardware integration.
+This SDK embodies a fundamental shift in how we think about smart devices. Instead of building remote controls for hardware, we're building semantic interfaces for artificial intelligence.
 
-**Ways to get involved:**
-- Test the framework with your own hardware projects
-- Share feedback on the developer experience
-- Contribute to documentation and examples
-- Propose new features or architectural improvements
+Every design decision prioritizes **AI comprehension** over human convenience. This means clear function names, meaningful parameters, and consistent result formats that let LLMs naturally reason about and combine device capabilities.
 
-### Contact
-- **Email**: `gyeongmingim478@gmail.com`
-- **Instagram**: `gyeongmin116`
+The result is hardware that doesn't just connect to the internet—it connects to intelligence.
 
 ---
 
 ## License
 
-This project is licensed under the **Apache License 2.0**. See the [LICENSE](./LICENSE) file for complete details.
+Licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file for complete details.
 
 ---
 
-
-
+*Build hardware that speaks AI.*
