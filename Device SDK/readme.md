@@ -219,8 +219,6 @@ The result is hardware that doesn't just connect to the internet—it connects t
 
 Licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file for complete details.
 
----
 
-*Build hardware that speaks AI.*
 
 
