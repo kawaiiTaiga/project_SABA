@@ -20,10 +20,9 @@ Through this work, we aim to create **the most convenient intelligence**, where 
 
 We are trying to answer the following technical questions as we build this tool:
 
-* How can we move beyond the request-response model and build an event-driven structure where the LLM can react to events?
 * What is the best way to connect various hardware in a consistent and efficient manner?
 * What prompt and MCP structures are needed for an LLM to best control physical devices?
-
+* And... How can we move beyond the request-response model and build an event-driven structure where the LLM can react to events?
 ---
 
 ### Version History
