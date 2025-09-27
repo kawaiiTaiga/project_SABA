@@ -1,5 +1,5 @@
 # Project SABA - Your First LLM Peripheral
-> 📄 [이 문서를 한국어로 보기 (Read this document in Korean)](README.ko.md)
+> 📄 [(Korean)](README.ko.md)
 ---
 
 ### What now?
