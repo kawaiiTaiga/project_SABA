@@ -4,7 +4,7 @@
 
 ### What now? 
 
-<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE1.PNG" alt="Current" width="750">
+<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE1.PNG" alt="Current" width="1000">
 
 지금까지, **사람**은 키보드와 같은 주변기기를 통해 **LLM**을 사용해왔습니다.
 그리고 **LLM**은 MCP(Model Context Protocol)를 통해 날씨, 검색, 데이터베이스 같은 **디지털 도구**를 사용합니다.
@@ -13,7 +13,7 @@
 
 ### What we do?
 
-<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE2.png" alt="Current" width="150">
+<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE2.PNG" alt="Current" width="1000">
 
 프로젝트 SABA는 바로 그 LLM을 위한 **새로운 종류의 주변기기**입니다.
 **LLM이 현실 세계와 직접 상호작용**하고, 물리적인 세상을 **'사용'**할 수 있는 도구를 제공하는 것을 목표로 합니다.
