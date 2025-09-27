@@ -4,7 +4,7 @@
 
 ### What now? 
 
-<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE1.png" alt="Current" width="150">
+<img src="[https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE1.png](https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE1.PNG)" alt="Current" width="150">
 
 지금까지, **사람**은 키보드와 같은 주변기기를 통해 **LLM**을 사용해왔습니다.
 그리고 **LLM**은 MCP(Model Context Protocol)를 통해 날씨, 검색, 데이터베이스 같은 **디지털 도구**를 사용합니다.
