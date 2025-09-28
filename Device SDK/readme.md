@@ -127,7 +127,7 @@ void register_tools(ToolRegistry& reg, const ToolConfig& cfg) {
 ### Initial Setup
 1. **Build and Upload** your project to the microcontroller
 2. **Connect to Setup Network**: Device creates `MCP-SETUP-XXXX` Wi-Fi AP on first boot
-3. **Configure via Browser**: Connect to the AP and enter your Wi-Fi credentials and MQTT server details
+3. **Configure via Browser**: Connect to the AP and enter your Wi-Fi credentials and MQTT server details(http://192.168.4.1/)
 4. **Automatic Operation**: Device reboots and connects to your network, announcing capabilities
 
 ### Runtime Management
@@ -218,6 +218,7 @@ The result is hardware that doesn't just connect to the internet—it connects t
 ## License
 
 Licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file for complete details.
+
 
 
 
