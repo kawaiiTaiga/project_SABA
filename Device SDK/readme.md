@@ -26,7 +26,7 @@ setCinematicLighting(255, 200, 150);           // Specific use case context
 checkRoomComfort();               // Meaningful purpose
 ```
 
-The key insight: **function names are the interface**. When an LLM sees `createWarmAmbiance()`, it immediately understands the capability. When it sees `setRGB(r, g, b)`, it has to become a lighting engineer.
+The key insight: **function names are the interface**. When an LLM sees `createWarmAmbiance()`, it immediately understands the capability. 
 
 ---
 
@@ -218,6 +218,7 @@ The result is hardware that doesn't just connect to the internet—it connects t
 ## License
 
 Licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file for complete details.
+
 
 
 
