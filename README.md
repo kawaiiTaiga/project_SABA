@@ -3,6 +3,10 @@
 
 An open-source framework for connecting LLMs to physical hardware.
 
+### Demo Video
+
+[![Project SABA Demo](https://img.youtube.com/vi/rwOtaaQY_-Q/0.jpg)](https://www.youtube.com/watch?v=rwOtaaQY_-Q)
+
 ---
 
 ### The Problem
