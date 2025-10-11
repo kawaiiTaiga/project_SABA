@@ -1,7 +1,7 @@
 # Project SABA
 > 📄 [(Korean)](README.ko.md)
 
-An open-source framework for connecting LLMs to physical hardware.
+An open-source framework for connecting LLM's peripherals.
 
 ### Demo Video
 
