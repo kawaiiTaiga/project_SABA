@@ -11,7 +11,7 @@ An open-source framework for connecting LLM's peripherals.
 
 ### The Problem
 
-<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE1.PNG" alt="Current Interaction" width="1000">
+<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/images/llm_tools.PNG" alt="Current Interaction" width="1000">
 
 LLMs can use digital tools (code interpreters, search engines, databases) via the Model Context Protocol (MCP).
 But connecting them to physical hardware—cameras, motors, sensors—is complicated.
@@ -20,7 +20,7 @@ But connecting them to physical hardware—cameras, motors, sensors—is complic
 
 ### The Solution
 
-<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/IMAGE2.PNG" alt="SABA Interaction" width="1000">
+<img src="https://github.com/kawaiiTaiga/project_SABA/blob/main/images/llm_peripherals.PNG" alt="SABA Interaction" width="1000">
 
 SABA provides a simple way for LLMs to control physical devices.
 Define your hardware's purpose in natural language, and the LLM figures out the rest.
