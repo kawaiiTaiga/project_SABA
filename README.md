@@ -81,7 +81,7 @@ What's next:
 ## Get Started
 
 **Hardware:** [Device SDK](https://github.com/kawaiiTaiga/project_SABA/tree/main/Device%20SDK)  
-**Server:** [Core Server](https://github.com/kawaiiTaiga/project_SABA/tree/main/core_Server)
+**Server:** [Core Server](https://github.com/kawaiiTaiga/project_SABA/tree/main/core_server)
 
 ---
 
