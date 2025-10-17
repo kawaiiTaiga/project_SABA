@@ -87,8 +87,9 @@ What's next:
 
 ## About
 
-This is a one-person side project. Help, ideas, and collaborations are welcome.
+Any help, ideas, and collaborations are welcome.
 
+Contact me
 - **Email**: gyeongmingim478@gmail.com
 - **Instagram**: gyeongmin116
 
