@@ -180,17 +180,6 @@ LLMAction({
 })
 ```
 
-#### MeowAction
-
-Simple action for logging/notifications.
-
-```python
-MeowAction({
-    'type': 'meow',
-    'message': 'Task completed! 🎉'
-})
-```
-
 ### Lifecycle
 
 Manages reflex lifespan.
@@ -403,5 +392,6 @@ Contributions are always welcome!
 ## 📄 License
 
 MIT License
+
 
 
