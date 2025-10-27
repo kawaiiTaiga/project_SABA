@@ -2,6 +2,8 @@
 
 **Smart Automated Behavioral Assistant** - LLM-powered Conditional Automation Framework
 
+> ⚠️ **BETA OF BETA VERSION** - This project is in early development stage. Features and APIs may change.
+
 SABA Reflex is a lightweight automation framework that automatically performs tasks in response to schedules, events, or sensor data. LLM (Claude) analyzes situations and invokes appropriate tools to execute tasks.
 
 ## 🌟 Key Features
@@ -16,9 +18,7 @@ SABA Reflex is a lightweight automation framework that automatically performs ta
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Examples](#examples)
-- [Architecture](#architecture)
+- [Example](#example)
 - [Configuration](#configuration)
 
 ## 🚀 Installation
@@ -108,97 +108,9 @@ Run:
 python main.py
 ```
 
-## 💡 Core Concepts
+## 📚 Example
 
-### Reflex
-
-A **Reflex** is a combination of `Trigger` + `Action` + `Tools`.
-
-```python
-reflex = Reflex(
-    id="unique_id",
-    name="Display Name",
-    trigger=ScheduleTrigger(...),  # When to execute
-    action=LLMAction(...),          # What to do
-    tools=['tool1', 'tool2'],       # Which tools to use
-    lifecycle=Lifecycle(...)        # How long to maintain
-)
-```
-
-### Trigger
-
-Detects conditions and activates reflexes.
-
-#### ScheduleTrigger
-```python
-ScheduleTrigger({
-    'type': 'schedule',
-    'cron': '0 9 * * *'  # Daily at 9 AM
-})
-```
-
-Cron Expression Examples:
-- `* * * * *` - Every minute
-- `0 * * * *` - Every hour (on the hour)
-- `0 9 * * *` - Daily at 9 AM
-- `0 9 * * 1` - Every Monday at 9 AM
-- `*/5 * * * *` - Every 5 minutes
-
-### Action
-
-Performs the actual work.
-
-#### LLMAction
-
-LLM analyzes the situation and invokes tools.
-
-```python
-# Simple command
-LLMAction({
-    'messages': [
-        {'role': 'user', 'content': 'Execute the motor tool.'}
-    ]
-})
-
-# With system prompt
-LLMAction({
-    'messages': [
-        {'role': 'system', 'content': 'You are a helpful assistant.'},
-        {'role': 'user', 'content': 'Check the plant health and water if needed.'}
-    ],
-    'temperature': 0.7
-})
-
-# Few-shot example
-LLMAction({
-    'messages': [
-        {'role': 'system', 'content': 'You control smart home devices.'},
-        {'role': 'user', 'content': 'Turn on the lights.'},
-        {'role': 'assistant', 'content': 'I\'ll use the light_control tool.'},
-        {'role': 'user', 'content': 'Now close the curtains.'}
-    ]
-})
-```
-
-### Lifecycle
-
-Manages reflex lifespan.
-
-```python
-# Persistent (runs indefinitely)
-Lifecycle(type='persistent')
-
-# Temporary (expires after 10 minutes, max 5 runs)
-Lifecycle(
-    type='temporary',
-    ttl_sec=600,
-    max_runs=5
-)
-```
-
-## 📚 Examples
-
-### Example 1: Plant Care Automation
+### Plant Care Automation
 
 ```python
 plant_care = Reflex(
@@ -220,101 +132,6 @@ Task: Check plant health and water if necessary.
     tools=['check_plant_health', 'water_pump'],
     lifecycle=Lifecycle(type='persistent')
 )
-```
-
-### Example 2: Temperature-based Control
-
-```python
-temperature_control = Reflex(
-    id="temp_control",
-    name="Auto Temperature Control",
-    trigger=ScheduleTrigger({
-        'type': 'schedule',
-        'cron': '*/10 * * * *'  # Every 10 minutes
-    }),
-    action=LLMAction({
-        'messages': [
-            {'role': 'system', 'content': 'Turn on the fan if temperature exceeds 25°C.'},
-            {'role': 'user', 'content': 'Check current temperature and take necessary action.'}
-        ]
-    }),
-    tools=['read_temperature', 'fan_control'],
-    lifecycle=Lifecycle(type='persistent')
-)
-```
-
-### Example 3: Reminder Scheduler
-
-```python
-reminder = Reflex(
-    id="reminder",
-    name="Water Drinking Reminder",
-    trigger=ScheduleTrigger({
-        'type': 'schedule',
-        'cron': '0 */2 * * *'  # Every 2 hours
-    }),
-    action=MeowAction({
-        'type': 'meow',
-        'message': '💧 Time to drink water!'
-    }),
-    tools=[],
-    lifecycle=Lifecycle(
-        type='temporary',
-        ttl_sec=28800,  # 8 hours
-        max_runs=4
-    )
-)
-```
-
-### Example 4: Multi-device Control
-
-```python
-good_night = Reflex(
-    id="good_night",
-    name="Good Night Routine",
-    trigger=ScheduleTrigger({
-        'type': 'schedule',
-        'cron': '0 23 * * *'  # Daily at 11 PM
-    }),
-    action=LLMAction({
-        'messages': [
-            {'role': 'system', 'content': 'You are an AI that helps with bedtime preparation.'},
-            {'role': 'user', 'content': '''
-Execute good night routine:
-1. Turn off all lights
-2. Close curtains
-3. Set AC to 22°C
-            '''}
-        ]
-    }),
-    tools=['light_control', 'curtain_control', 'ac_control'],
-    lifecycle=Lifecycle(type='persistent')
-)
-```
-
-## 🏗️ Architecture
-
-```
-saba-reflex/
-├── reflex/
-│   ├── core/
-│   │   ├── engine.py          # Reflex execution engine
-│   │   ├── reflex.py          # Reflex definition
-│   │   ├── lifecycle.py       # Lifecycle management
-│   │   └── state.py           # Global state management
-│   ├── triggers/
-│   │   ├── base.py            # Trigger base class
-│   │   └── schedule.py        # Schedule trigger
-│   ├── actions/
-│   │   ├── base.py            # Action base class
-│   │   ├── llm.py             # LLM action
-│   │   └── meow.py            # Simple notification action
-│   └── tools/
-│       └── registry.py        # MCP tool registry
-├── bridge/
-│   └── bridge_mcp.py          # MCP Bridge (MQTT integration)
-├── main.py                    # Main entry point
-└── requirements.txt
 ```
 
 ## ⚙️ Configuration
@@ -393,5 +210,25 @@ Contributions are always welcome!
 
 MIT License
 
+## 🙋 FAQ
 
+### Q: Can I use it without MCP Bridge?
+A: Yes! You can register custom tools directly. MCP Bridge is only for MQTT device control.
 
+### Q: Can I use other LLMs?
+A: Currently only Claude is supported, but you can extend `LLMAction` to add other LLMs.
+
+### Q: Can I add/remove reflexes dynamically?
+A: Yes! You can manage them at runtime using `engine.add_reflex()` and `engine.remove_reflex()`.
+
+### Q: What happens when an error occurs?
+A: The reflex remains active and will retry at the next trigger time. Check logs for errors.
+
+## 📞 Support
+
+- Issues: [GitHub Issues](https://github.com/your-org/saba-reflex/issues)
+- Discussions: [GitHub Discussions](https://github.com/your-org/saba-reflex/discussions)
+
+---
+
+Made with ❤️ by SABA Team
