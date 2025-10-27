@@ -1,4 +1,4 @@
-# reflex/actions/llm.py
+# reflex/actions/llm.py - 디버깅 버전
 from typing import Dict, Any, Callable
 import os
 from anthropic import AsyncAnthropic
@@ -6,24 +6,19 @@ from .base import ActionBase
 
 @ActionBase.register('llm')
 class LLMAction(ActionBase):
-    """
-    LLM 기반 Action (Tool Calling)
-    
-    Config:
-        type: "llm" (필수)
-        api: "claude" (현재 claude만 지원)
-        model: "claude-sonnet-4-20250514"
-        prompt: 시스템 프롬프트
-        temperature: 0.0~1.0 (기본: 0.7)
-    """
+    """LLM 기반 Action (Tool Calling)"""
     
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         
         self.api = config.get('api', 'claude')
         self.model = config.get('model', 'claude-sonnet-4-20250514')
-        self.prompt = config.get('prompt', '')
+        self.messages = config.get('messages', [])
         self.temperature = config.get('temperature', 0.7)
+        
+        print(f"[DEBUG] LLMAction initialized:")
+        print(f"  - config keys: {list(config.keys())}")
+        print(f"  - messages: {self.messages}")
         
         # API 클라이언트 초기화
         if self.api == 'claude':
@@ -45,25 +40,69 @@ class LLMAction(ActionBase):
             # 1. Tool 스펙 준비
             tool_specs = self._prepare_tool_specs(tools)
             
-            # 2. 사용자 메시지 구성
-            user_message = self._build_user_message(event, state)
+            # 2. 메시지 처리
+            system_content = None
+            user_messages = []
+            
+            for msg in self.messages:
+                role = msg.get('role', 'user')
+                content = msg.get('content', '')
+                
+                if role == 'system':
+                    system_content = content
+                elif role == 'user':
+                    user_messages.append({
+                        'role': 'user',
+                        'content': content
+                    })
+                elif role == 'assistant':
+                    user_messages.append({
+                        'role': 'assistant',
+                        'content': content
+                    })
+            
+            # user 메시지가 없으면 기본 메시지
+            if not user_messages:
+                user_messages = [{
+                    'role': 'user',
+                    'content': 'Please use the available tools as needed.'
+                }]
             
             print(f"\n🤖 Calling LLM...")
             print(f"   Model: {self.model}")
             print(f"   Tools: {list(tools.keys())}")
             
+            # system 파라미터 준비
+            if system_content:
+                system_param = [{"type": "text", "text": system_content}]
+                print(f"   [DEBUG] System param: {system_param}")
+            else:
+                print(f"   [DEBUG] No system prompt - will omit parameter")
+            
+            print(f"   [DEBUG] User messages: {user_messages}")
+            print(f"   [DEBUG] About to call API...")
+            
             # 3. LLM 호출
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                temperature=self.temperature,
-                system=self.prompt,
-                messages=[{
-                    "role": "user",
-                    "content": user_message
-                }],
-                tools=tool_specs if tool_specs else None
-            )
+            call_params = {
+                "model": self.model,
+                "max_tokens": 4096,
+                "temperature": self.temperature,
+                "messages": user_messages,
+            }
+            
+            # system이 있을 때만 추가
+            if system_content:
+                call_params["system"] = system_param
+            
+            # tools가 있을 때만 추가
+            if tool_specs:
+                call_params["tools"] = tool_specs
+            
+            print(f"   [DEBUG] Call params keys: {list(call_params.keys())}")
+            
+            response = await self.client.messages.create(**call_params)
+            
+            print(f"   [DEBUG] API call succeeded!")
             
             # 4. Tool Calling 처리
             tool_results = []
@@ -108,6 +147,7 @@ class LLMAction(ActionBase):
             
         except Exception as e:
             print(f"   ❌ LLM execution error: {e}")
+            print(f"   [DEBUG] Error type: {type(e)}")
             import traceback
             traceback.print_exc()
             return {
@@ -120,48 +160,45 @@ class LLMAction(ActionBase):
         specs = []
         
         for tool_name, tool_func in tools.items():
-            # 기본 스펙
-            doc = getattr(tool_func, '__doc__', f"Execute {tool_name}")
+            # 함수에 붙어있는 MCP 스키마 가져오기
+            mcp_schema = getattr(tool_func, '_mcp_schema', None)
             
-            spec = {
-                "name": tool_name,
-                "description": doc.strip() if doc else f"Execute {tool_name}",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
+            if mcp_schema:
+                # MCP 스키마가 있으면 그대로 사용
+                description = mcp_schema.get('description', f"Execute {tool_name}")
+                parameters = mcp_schema.get('parameters', {})
+                
+                spec = {
+                    "name": tool_name,
+                    "description": description,
+                    "input_schema": parameters
                 }
-            }
+            else:
+                # 스키마가 없으면 기본 스펙
+                doc = getattr(tool_func, '__doc__', f"Execute {tool_name}")
+                
+                spec = {
+                    "name": tool_name,
+                    "description": doc.strip() if doc else f"Execute {tool_name}",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
             
             specs.append(spec)
         
         return specs
-    
-    def _build_user_message(self, event: Dict[str, Any], state: Dict[str, Any]) -> str:
-        """컨텍스트를 포함한 사용자 메시지 구성"""
-        lines = ["Current situation:\n"]
-        
-        # 이벤트 정보
-        lines.append(f"Event: {event}\n")
-        
-        # 상태 정보
-        if state:
-            lines.append("\nCurrent state:")
-            for key, value in state.items():
-                lines.append(f"  - {key}: {value}")
-        
-        lines.append("\n\nPlease decide what actions to take.")
-        
-        return '\n'.join(lines)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             'type': 'llm',
             'api': self.api,
             'model': self.model,
-            'prompt': self.prompt,
+            'messages': self.messages,
             'temperature': self.temperature
         }
     
     def __repr__(self):
-        return f"LLMAction(api='{self.api}', model='{self.model}')"
+        return f"LLMAction(api='{self.api}', model='{self.model}', {len(self.messages)} messages)"

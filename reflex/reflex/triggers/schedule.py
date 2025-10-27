@@ -10,7 +10,7 @@ class ScheduleTrigger(TriggerBase):
     
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        
+        config['type'] = 'schedule'
         self.cron = config.get('cron')
         if not self.cron:
             raise ValueError("ScheduleTrigger requires 'cron' field")

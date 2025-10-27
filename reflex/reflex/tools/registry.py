@@ -1,103 +1,153 @@
 # reflex/tools/registry.py
 from typing import Dict, Any, Callable, List
+from contextlib import AsyncExitStack
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ToolRegistry:
     """
     MCP 툴 레지스트리
     
-    SABA MCP Bridge에서 툴 목록을 가져와서 관리
+    SABA MCP Bridge에 SSE로 연결해서 툴 관리
     """
     
-    def __init__(self, mcp_bridge_url: str = "http://localhost:8083"):
+    def __init__(self, mcp_bridge_url: str = "http://localhost:8083\sse"):
         self.mcp_bridge_url = mcp_bridge_url
+        self.sse_url = f"{mcp_bridge_url}/sse"  # SSE 엔드포인트
         self.tools: Dict[str, Callable] = {}
         self.tool_schemas: Dict[str, Dict] = {}
+        self.session: ClientSession = None
+        self.exit_stack = AsyncExitStack()
+    
+    async def connect(self):
+        """MCP Bridge에 SSE로 연결"""
+        try:
+            print(f"🔌 Connecting to MCP Bridge via SSE...")
+            print(f"   URL: {self.sse_url}")
+            
+            # SSE 클라이언트로 연결
+            streams_context = sse_client(url=self.sse_url)
+            streams = await self.exit_stack.enter_async_context(streams_context)
+            
+            # ClientSession 생성
+            self.session = ClientSession(
+                read_stream=streams[0],
+                write_stream=streams[1]
+            )
+            await self.exit_stack.enter_async_context(self.session)
+            
+            # Initialize
+            await self.session.initialize()
+            
+            print(f"   ✅ Connected to MCP Bridge\n")
+            return True
+            
+        except Exception as e:
+            print(f"   ❌ Failed to connect: {e}\n")
+            return False
+    
+    async def disconnect(self):
+        """연결 종료"""
+        await self.exit_stack.aclose()
+        print("🔌 Disconnected from MCP Bridge")
     
     async def load_tools_from_mcp(self):
         """
         MCP Bridge에서 사용 가능한 툴 목록 로드
         """
         print("📦 Loading tools from MCP Bridge...")
-        print(f"   URL: {self.mcp_bridge_url}")
+        
+        if not self.session:
+            print("   ⚠️ Not connected. Call connect() first.")
+            return
         
         try:
-            async with httpx.AsyncClient() as client:
-                # 디바이스 목록 가져오기
-                resp = await client.get(
-                    f"{self.mcp_bridge_url}/devices",
-                    timeout=10.0
-                )
-                resp.raise_for_status()
-                devices = resp.json()
+            # MCP Session으로 툴 목록 가져오기
+            tools_result = await self.session.list_tools()
+            mcp_tools = tools_result.tools
+            
+            print(f"   Found {len(mcp_tools)} tool(s) from MCP")
+            
+            # 각 툴 등록
+            for tool in mcp_tools:
+                tool_name = tool.name
                 
-                print(f"   Found {len(devices)} device(s)")
+                print(f"      ✓ {tool_name}")
                 
-                # 각 디바이스의 툴 등록
-                for device in devices:
-                    device_id = device.get('device_id')
-                    tools = device.get('tools', [])
-                    
-                    print(f"\n   Device: {device_id}")
-                    
-                    for tool in tools:
-                        tool_name = tool.get('name')
-                        
-                        # 전역 툴 이름 생성
-                        # 예: check_plant_health_esp32-plant-01
-                        global_name = f"{tool_name}_{device_id}"
-                        
-                        # 툴 함수 생성
-                        tool_func = self._create_tool_function(device_id, tool_name)
-                        
-                        # 등록
-                        self.tools[global_name] = tool_func
-                        self.tool_schemas[global_name] = tool
-                        
-                        print(f"      ✓ {global_name}")
+                # 툴 함수 생성
+                tool_func = self._create_tool_function(tool_name, tool)
                 
-                print(f"\n✅ Loaded {len(self.tools)} tool(s) total\n")
-                
-        except httpx.ConnectError:
-            print(f"   ❌ Cannot connect to MCP Bridge at {self.mcp_bridge_url}")
-            print(f"   Make sure MCP Bridge is running!\n")
-            raise
+                # 등록
+                self.tools[tool_name] = tool_func
+                self.tool_schemas[tool_name] = {
+                    'name': tool.name,
+                    'description': tool.description,
+                    'parameters': tool.inputSchema if hasattr(tool, 'inputSchema') else {}
+                }
+            
+            print(f"\n✅ Loaded {len(self.tools)} tool(s) total\n")
+            
         except Exception as e:
             print(f"   ❌ Error loading tools: {e}\n")
             raise
     
-    def _create_tool_function(self, device_id: str, tool_name: str) -> Callable:
+    def _create_tool_function(self, tool_name: str, tool_info: Any) -> Callable:
         """
         MCP 툴 호출 함수 생성 (클로저)
         
-        이 함수가 실제로 MCP Bridge를 통해 디바이스 툴을 호출함
+        이 함수가 실제로 MCP Session을 통해 툴을 호출함
         """
         async def tool_func(**kwargs):
-            """Call MCP tool via bridge"""
-            async with httpx.AsyncClient() as client:
-                try:
-                    # MCP Bridge의 invoke 엔드포인트 호출
-                    resp = await client.post(
-                        f"{self.mcp_bridge_url}/invoke",
-                        json={
-                            'device_id': device_id,
-                            'tool': tool_name,
-                            'args': kwargs
-                        },
-                        timeout=30.0
-                    )
-                    resp.raise_for_status()
-                    return resp.json()
-                    
-                except Exception as e:
+            """Call MCP tool via SSE session"""
+            if not self.session:
+                return {
+                    'success': False,
+                    'error': 'Not connected to MCP Bridge'
+                }
+            
+            try:
+                # MCP Session으로 tool 호출
+                result = await self.session.call_tool(tool_name, arguments=kwargs)
+                
+                # 결과 처리
+                if result.isError:
                     return {
                         'success': False,
-                        'error': str(e)
+                        'error': str(result.content)
                     }
+                
+                # 성공 시 content 반환
+                content_list = []
+                for content in result.content:
+                    if hasattr(content, 'text'):
+                        content_list.append(content.text)
+                    elif hasattr(content, 'data'):
+                        content_list.append(content.data)
+                
+                return {
+                    'success': True,
+                    'result': content_list[0] if len(content_list) == 1 else content_list
+                }
+                
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': str(e)
+                }
         
         # Docstring 설정 (LLM이 이걸 봄)
-        schema = self.tool_schemas.get(f"{tool_name}_{device_id}", {})
-        tool_func.__doc__ = schema.get('description', f"Call {tool_name} on {device_id}")
+        tool_func.__doc__ = tool_info.description or f"Call {tool_name}"
+        
+        # 스키마를 함수 attribute로 추가 (LLMAction이 이걸 사용)
+        tool_func._mcp_schema = {
+            'name': tool_info.name,
+            'description': tool_info.description,
+            'parameters': tool_info.inputSchema if hasattr(tool_info, 'inputSchema') else {}
+        }
         
         return tool_func
     
@@ -106,7 +156,7 @@ class ToolRegistry:
         Reflex가 사용할 툴들만 반환
         
         Args:
-            tool_names: ['check_plant_health_esp32-plant-01', ...]
+            tool_names: ['check_plant_health', ...]
         
         Returns:
             {tool_name: tool_function, ...}
