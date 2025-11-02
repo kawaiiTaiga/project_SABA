@@ -1,35 +1,128 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Projection Manager - 웹 관리 인터페이스 전용
-- Projection 설정 파일 직접 읽기/쓰기
-- Bridge API와 통신하여 장치 정보 조회
-- Docker API를 통한 bridge 컨테이너 재시작
-- 포트 8084에서 웹 인터페이스 제공
+Projection Manager v2 - EVENT 지원 + 실시간 이벤트 모니터링
+- Action/Event 탭 분리
+- EVENT 테스트 및 실시간 로그
+- MQTT events 토픽 구독
 """
-import os, sys, json, logging, socket, requests
+import os, sys, json, logging, socket, requests, threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List
 from pathlib import Path
 from http import HTTPStatus
+from collections import deque
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 import uvicorn
 import docker
 
-# ---- STDERR-only logging (STDIO-safe)
+# Optional MQTT support
+try:
+    import paho.mqtt.client as mqtt
+    MQTT_AVAILABLE = True
+except ImportError:
+    MQTT_AVAILABLE = False
+    log("[WARN] paho-mqtt not installed. Event monitoring disabled. Install with: pip install paho-mqtt")
+
+# ---- STDERR-only logging
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 def log(*a, **k): print(*a, file=sys.stderr, flush=True, **k)
 
 # ========= Env =========
-API_PORT = int(os.getenv("API_PORT", "8084"))  # 웹 관리 인터페이스 전용 포트
+API_PORT = int(os.getenv("API_PORT", "8084"))
 PROJECTION_CONFIG_PATH = os.getenv("PROJECTION_CONFIG_PATH", "./projection_config.json")
 BRIDGE_API_URL = os.getenv("BRIDGE_API_URL", "http://bridge:8083")
-DOCKER_HOST = os.getenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+MQTT_HOST = os.getenv("MQTT_HOST", "mcp-broker")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# ========= MQTT Event Collector =========
+class MQTTEventCollector:
+    def __init__(self, host: str, port: int, max_events: int = 100):
+        self.host = host
+        self.port = port
+        self.max_events = max_events
+        self.events: Dict[str, deque] = {}  # device_id -> deque of events
+        self._lock = threading.Lock()
+        self.client = None
+        self._running = False
+        self._mqtt_available = MQTT_AVAILABLE
+        
+    def start(self):
+        """Start MQTT client in background thread"""
+        if not self._mqtt_available:
+            log("[MQTT] paho-mqtt not installed, event monitoring disabled")
+            return
+        
+        if self._running:
+            return
+        
+        try:
+            self.client = mqtt.Client()
+            self.client.on_connect = self._on_connect
+            self.client.on_message = self._on_message
+            
+            self.client.connect(self.host, self.port, 60)
+            self._running = True
+            thread = threading.Thread(target=self.client.loop_forever, daemon=True)
+            thread.start()
+            log(f"[MQTT] Started event collector: {self.host}:{self.port}")
+        except Exception as e:
+            log(f"[MQTT] Failed to connect: {e}")
+    
+    def _on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            client.subscribe("mcp/dev/+/events")
+            log("[MQTT] Subscribed to mcp/dev/+/events")
+        else:
+            log(f"[MQTT] Connection failed: {rc}")
+    
+    def _on_message(self, client, userdata, msg):
+        try:
+            # Topic: mcp/dev/{device_id}/events
+            parts = msg.topic.split('/')
+            if len(parts) >= 3:
+                device_id = parts[2]
+                payload = json.loads(msg.payload.decode('utf-8'))
+                
+                with self._lock:
+                    if device_id not in self.events:
+                        self.events[device_id] = deque(maxlen=self.max_events)
+                    
+                    event_entry = {
+                        "timestamp": now_iso(),
+                        "device_id": device_id,
+                        "payload": payload
+                    }
+                    self.events[device_id].append(event_entry)
+                    
+                log(f"[MQTT] Event from {device_id}: {payload.get('type', 'unknown')}")
+        except Exception as e:
+            log(f"[MQTT] Error processing message: {e}")
+    
+    def get_recent_events(self, device_id: str, limit: int = 20) -> List[Dict]:
+        """Get recent events for a device"""
+        if not self._mqtt_available:
+            return []
+        with self._lock:
+            if device_id not in self.events:
+                return []
+            events = list(self.events[device_id])
+            return events[-limit:] if len(events) > limit else events
+    
+    def clear_events(self, device_id: str):
+        """Clear events for a device"""
+        if not self._mqtt_available:
+            return
+        with self._lock:
+            if device_id in self.events:
+                self.events[device_id].clear()
+
+mqtt_collector = MQTTEventCollector(MQTT_HOST, MQTT_PORT) if MQTT_AVAILABLE else None
 
 # ========= Projection Config Manager =========
 class ProjectionConfigManager:
@@ -38,41 +131,29 @@ class ProjectionConfigManager:
         self.ensure_config_exists()
     
     def ensure_config_exists(self):
-        """Ensure config file exists with default values"""
         if not Path(self.config_path).exists():
             default_config = {
                 "devices": {},
                 "global": {
                     "auto_enable_new_devices": True,
-                    "auto_enable_new_tools": True
+                    "auto_enable_new_tools": True,
+                    "auto_enable_new_events": False
                 }
             }
             self.save_config(default_config)
             log(f"[CONFIG] Created default config at {self.config_path}")
     
     def load_config(self) -> Dict[str, Any]:
-        """Load projection configuration from JSON file"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            log(f"[CONFIG] Loaded config from {self.config_path}")
-            return config
+                return json.load(f)
         except Exception as e:
             log(f"[CONFIG] Error loading config: {e}")
-            return {
-                "devices": {},
-                "global": {
-                    "auto_enable_new_devices": True,
-                    "auto_enable_new_tools": True
-                }
-            }
+            return {"devices": {}, "global": {"auto_enable_new_devices": True, "auto_enable_new_tools": True, "auto_enable_new_events": False}}
     
     def save_config(self, config: Dict[str, Any]) -> bool:
-        """Save configuration to file"""
         try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-            
+            os.makedirs(os.path.dirname(self.config_path) or '.', exist_ok=True)
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             log(f"[CONFIG] Saved config to {self.config_path}")
@@ -89,7 +170,6 @@ class BridgeAPIClient:
         self.base_url = base_url.rstrip('/')
     
     def get_devices(self) -> List[Dict[str, Any]]:
-        """Get devices from bridge API"""
         try:
             response = requests.get(f"{self.base_url}/devices", timeout=10)
             response.raise_for_status()
@@ -99,7 +179,6 @@ class BridgeAPIClient:
             return []
     
     def get_device(self, device_id: str) -> Optional[Dict[str, Any]]:
-        """Get specific device from bridge API"""
         try:
             response = requests.get(f"{self.base_url}/devices/{device_id}", timeout=10)
             response.raise_for_status()
@@ -109,7 +188,6 @@ class BridgeAPIClient:
             return None
     
     def health_check(self) -> bool:
-        """Check if bridge API is healthy"""
         try:
             response = requests.get(f"{self.base_url}/healthz", timeout=5)
             return response.status_code == 200
@@ -129,476 +207,546 @@ class DockerManager:
             log(f"[DOCKER] Failed to connect to Docker: {e}")
     
     def restart_bridge_container(self) -> bool:
-        """Restart the bridge container"""
         if not self.client:
-            log("[DOCKER] Docker client not available")
             return False
-        
         try:
             container = self.client.containers.get("mcp-bridge")
             container.restart()
-            log("[DOCKER] Bridge container restarted successfully")
+            log("[DOCKER] Bridge container restarted")
             return True
-        except docker.errors.NotFound:
-            log("[DOCKER] Bridge container 'mcp-bridge' not found")
-            return False
         except Exception as e:
-            log(f"[DOCKER] Failed to restart bridge container: {e}")
+            log(f"[DOCKER] Failed to restart: {e}")
             return False
     
     def get_bridge_status(self) -> Dict[str, Any]:
-        """Get bridge container status"""
         if not self.client:
-            return {"status": "docker_unavailable", "error": "Docker client not available"}
-        
+            return {"status": "docker_unavailable"}
         try:
             container = self.client.containers.get("mcp-bridge")
-            
-            # 기본 정보만 안전하게 가져오기
-            result = {
+            return {
                 "status": container.status,
                 "running": container.status == "running",
                 "id": container.id[:12],
                 "name": container.name
             }
-            
-            # 이미지 정보는 별도로 안전하게 처리
-            try:
-                # attrs에서 직접 이미지 이름 가져오기 (API 호출 없이)
-                image_info = container.attrs.get('Config', {}).get('Image', 'unknown')
-                result["image"] = image_info
-            except Exception as e:
-                log(f"[DOCKER] Warning: Could not get image info: {e}")
-                result["image"] = "unknown"
-            
-            return result
-            
-        except docker.errors.NotFound:
-            log("[DOCKER] Container 'mcp-bridge' not found")
-            return {
-                "status": "container_not_found", 
-                "error": "Container 'mcp-bridge' not found"
-            }
         except Exception as e:
-            log(f"[DOCKER] Failed to get bridge status: {e}")
             return {"status": "error", "error": str(e)}
 
 docker_manager = DockerManager()
 
 # ========= FastAPI App =========
-app = FastAPI(title="Project Saba MCP Manager")
+app = FastAPI(title="Project Saba MCP Manager v2")
 
-def get_html_template():
-    """Get HTML template with minimal inline content"""
+@app.on_event("startup")
+def startup_event():
+    """Start MQTT collector on startup"""
+    if mqtt_collector:
+        mqtt_collector.start()
+    else:
+        log("[MQTT] Event monitoring disabled (paho-mqtt not installed)")
+
+@app.get("/", response_class=HTMLResponse)
+def projection_manager_ui():
+    """Enhanced UI with Action/Event tabs"""
+    return HTMLResponse(content=get_html_template_v2())
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "ts": now_iso(), "service": "projection-manager-v2", "port": API_PORT}
+
+@app.get("/api/config")
+def get_config():
+    return config_manager.load_config()
+
+@app.post("/api/config")
+def save_config(config: dict):
+    if config_manager.save_config(config):
+        return {"ok": True, "message": "Configuration saved"}
+    raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, "Failed to save")
+
+@app.get("/api/devices")
+def get_devices():
+    return bridge_api.get_devices()
+
+@app.get("/api/devices/{device_id}")
+def get_device(device_id: str):
+    device = bridge_api.get_device(device_id)
+    if not device:
+        raise HTTPException(HTTPStatus.NOT_FOUND, "Device not found")
+    return device
+
+@app.get("/api/devices/{device_id}/events")
+def get_device_events(device_id: str, limit: int = 20):
+    """Get recent events for a device"""
+    if not mqtt_collector:
+        return {"device_id": device_id, "events": [], "count": 0, "note": "MQTT not available (install paho-mqtt)"}
+    events = mqtt_collector.get_recent_events(device_id, limit)
+    return {"device_id": device_id, "events": events, "count": len(events)}
+
+@app.delete("/api/devices/{device_id}/events")
+def clear_device_events(device_id: str):
+    """Clear event history for a device"""
+    if not mqtt_collector:
+        return {"ok": False, "message": "MQTT not available"}
+    mqtt_collector.clear_events(device_id)
+    return {"ok": True, "message": f"Cleared events for {device_id}"}
+
+@app.post("/api/bridge/invoke")
+def bridge_invoke(payload: dict):
+    """Proxy to Bridge API invoke endpoint"""
+    try:
+        response = requests.post(
+            f"{bridge_api.base_url}/invoke",
+            json=payload,
+            timeout=10
+        )
+        return response.json()
+    except Exception as e:
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, f"Bridge invoke failed: {e}")
+
+@app.get("/api/bridge/health")
+def bridge_health():
+    healthy = bridge_api.health_check()
+    return {"healthy": healthy, "url": BRIDGE_API_URL}
+
+@app.post("/api/bridge/reload")
+def bridge_reload():
+    return {"ok": True, "message": "Use restart button to apply changes"}
+
+@app.get("/api/docker/status")
+def docker_status():
+    return docker_manager.get_bridge_status()
+
+@app.post("/api/docker/restart")
+def docker_restart():
+    if docker_manager.restart_bridge_container():
+        return {"ok": True, "message": "Bridge restarted"}
+    raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, "Failed to restart")
+
+def get_html_template_v2():
+    """Enhanced HTML with Action/Event tabs and real-time event monitoring"""
     return '''<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Saba MCP Manager</title>
+    <title>Project Saba MCP Manager v2</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
-        .header { background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%); color: white; padding: 20px; text-align: center; position: relative; }
-        .header h1 { font-size: 2em; margin-bottom: 10px; }
-        .header .subtitle { font-size: 0.9em; opacity: 0.8; margin-bottom: 15px; }
-        .language-selector { position: absolute; top: 20px; right: 20px; }
-        .language-selector select { padding: 5px 10px; border: none; border-radius: 5px; background: rgba(255,255,255,0.2); color: white; }
-        .status-badge { display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 0.9em; font-weight: bold; margin: 0 5px; }
-        .status-online { background: #27ae60; }
-        .status-offline { background: #e74c3c; }
-        .status-warning { background: #f39c12; }
-        .main-content { padding: 30px; }
-        .section { margin-bottom: 30px; border: 1px solid #e0e0e0; border-radius: 10px; overflow: hidden; }
-        .section-header { background: #f8f9fa; padding: 15px 20px; border-bottom: 1px solid #e0e0e0; font-weight: bold; color: #333; }
-        .section-content { padding: 20px; }
-        .naming-rules { background: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 10px; font-size: 0.9em; color: #666; }
-        .naming-rules strong { color: #333; }
-        .btn { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.3s ease; }
-        .btn-primary { background: #3498db; color: white; }
-        .btn-success { background: #27ae60; color: white; }
-        .btn-warning { background: #f39c12; color: white; }
-        .btn-danger { background: #e74c3c; color: white; }
-        .actions { display: flex; gap: 15px; margin-top: 30px; justify-content: center; flex-wrap: wrap; }
-        .loading { display: none; text-align: center; padding: 20px; }
-        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 10px; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .alert { padding: 15px; border-radius: 5px; margin-bottom: 20px; display: none; }
+        body { font-family: system-ui; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%); color: white; padding: 20px; text-align: center; }
+        .header h1 { font-size: 2em; margin-bottom: 5px; }
+        .header .version { font-size: 0.9em; opacity: 0.7; }
+        .content { padding: 30px; }
+        
+        /* Tabs */
+        .tabs { display: flex; border-bottom: 2px solid #e0e0e0; margin-bottom: 20px; }
+        .tab { padding: 12px 24px; cursor: pointer; background: none; border: none; font-size: 1em; color: #666; transition: all 0.3s; }
+        .tab:hover { background: #f5f5f5; }
+        .tab.active { color: #667eea; border-bottom: 3px solid #667eea; font-weight: 600; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        /* Device Cards */
+        .device-card { background: #f9f9f9; border-radius: 10px; padding: 20px; margin-bottom: 15px; border-left: 4px solid #667eea; }
+        .device-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .device-name { font-size: 1.2em; font-weight: 600; }
+        .device-status { padding: 4px 12px; border-radius: 20px; font-size: 0.85em; }
+        .status-online { background: #4caf50; color: white; }
+        .status-offline { background: #f44336; color: white; }
+        
+        /* Tool Lists */
+        .tool-list { margin-top: 15px; }
+        .tool-item { background: white; padding: 15px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #e0e0e0; }
+        .tool-header { display: flex; justify-content: space-between; align-items: center; }
+        .tool-name { font-weight: 600; color: #333; }
+        .tool-toggle { margin-left: auto; }
+        .tool-desc { color: #666; font-size: 0.9em; margin-top: 8px; }
+        
+        /* Event specific */
+        .event-item { border-left: 4px solid #ff9800; }
+        .event-signals { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+        .signal-badge { background: #fff3e0; color: #e65100; padding: 4px 10px; border-radius: 12px; font-size: 0.85em; }
+        .event-test-btn { background: #2196f3; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-top: 10px; }
+        .event-test-btn:hover { background: #1976d2; }
+        .event-log { background: #263238; color: #aed581; padding: 15px; border-radius: 8px; margin-top: 10px; max-height: 200px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.85em; }
+        .event-log-entry { margin-bottom: 8px; }
+        .event-log-time { color: #64b5f6; }
+        .event-log-type { color: #ffd54f; }
+        
+        /* Buttons */
+        button { cursor: pointer; transition: all 0.3s; }
+        .btn-primary { background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-size: 1em; }
+        .btn-primary:hover { background: #5568d3; }
+        .btn-danger { background: #f44336; color: white; border: none; padding: 10px 20px; border-radius: 6px; }
+        .btn-danger:hover { background: #d32f2f; }
+        
+        /* Settings */
+        .settings-section { background: #f9f9f9; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+        .settings-section h3 { margin-bottom: 15px; }
+        .checkbox-group { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        
+        /* Alert */
+        .alert { padding: 15px; border-radius: 8px; margin-bottom: 20px; display: none; }
         .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .alert-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .device-card { border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 15px; overflow: hidden; }
-        .device-header { background: #f1f3f4; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
-        .device-info h3 { color: #333; margin-bottom: 5px; }
-        .device-id { color: #666; font-size: 0.9em; font-family: monospace; }
-        .device-status { display: flex; align-items: center; gap: 10px; }
-        .device-tools { padding: 15px; background: #fafafa; }
-        .tool-item { background: white; border: 1px solid #e0e0e0; border-radius: 5px; padding: 10px; margin-bottom: 10px; }
-        .tool-controls { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 10px; align-items: center; margin-top: 10px; }
-        .form-group { display: flex; flex-direction: column; }
-        .form-group label { font-size: 0.8em; color: #666; margin-bottom: 3px; }
-        input[type="text"], textarea, select { padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em; }
-        input[type="checkbox"] { transform: scale(1.2); }
+        
+        /* Loading */
+        .loading { text-align: center; padding: 20px; display: none; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #667eea; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Toggle Switch */
+        .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #4caf50; }
+        input:checked + .slider:before { transform: translateX(26px); }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <div class="language-selector">
-                <select id="language-select" onchange="changeLanguage()">
-                    <option value="ko">한국어</option>
-                    <option value="en">English</option>
-                </select>
-            </div>
-            <h1>Project Saba MCP Manager</h1>
-            <div class="subtitle">IoT Device Tool Projection Control</div>
-            <div>
-                <span id="bridge-status" class="status-badge status-offline">Bridge: Checking...</span>
-                <span id="docker-status" class="status-badge status-offline">Docker: Checking...</span>
-            </div>
+            <h1>🤖 Project Saba MCP Manager</h1>
+            <div class="version">v2.0 - Event Monitoring Edition</div>
         </div>
         
-        <div class="main-content">
-            <div id="alert" class="alert"></div>
+        <div class="content">
+            <div class="alert" id="alert"></div>
+            <div class="loading" id="loading"><div class="spinner"></div></div>
             
-            <div class="loading" id="loading">
-                <div class="spinner"></div>
-                <div>Loading...</div>
+            <!-- Main Tabs -->
+            <div class="tabs">
+                <button class="tab active" onclick="switchMainTab('devices')">Devices</button>
+                <button class="tab" onclick="switchMainTab('settings')">Settings</button>
+                <button class="tab" onclick="switchMainTab('bridge')">Bridge Status</button>
             </div>
             
-            <div class="section">
-                <div class="section-header">Device List & Projection Settings</div>
-                <div class="section-content">
-                    <div class="naming-rules">
-                        <strong>Alias Naming Rules:</strong><br>
-                        • Only letters (a-z, A-Z), numbers (0-9), underscore (_), hyphen (-) allowed<br>
-                        • No spaces, special characters, or non-ASCII characters<br>
-                        • Examples: take_photo, camera-shot ✅ / take photo, 사진촬영 ❌
-                    </div>
-                    <div id="devices-container">Loading devices...</div>
+            <div id="main-content">
+                <!-- Devices Tab -->
+                <div id="tab-devices" class="tab-content active">
+                    <div id="devices-container"></div>
                 </div>
-            </div>
-            
-            <div class="section">
-                <div class="section-header">Global Settings</div>
-                <div class="section-content">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                        <label><input type="checkbox" id="auto-enable-devices"> Auto-enable new devices</label>
-                        <label><input type="checkbox" id="auto-enable-tools"> Auto-enable new tools</label>
+                
+                <!-- Settings Tab -->
+                <div id="tab-settings" class="tab-content">
+                    <div class="settings-section">
+                        <h3>Global Settings</h3>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="auto-enable-devices">
+                            <label for="auto-enable-devices">Auto-enable new devices</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="auto-enable-tools">
+                            <label for="auto-enable-tools">Auto-enable new actions</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="auto-enable-events">
+                            <label for="auto-enable-events">Auto-enable new events</label>
+                        </div>
+                        <button class="btn-primary" onclick="saveGlobalSettings()">Save Settings</button>
                     </div>
                 </div>
-            </div>
-            
-            <div class="actions">
-                <button class="btn btn-primary" onclick="loadData()">Refresh</button>
-                <button class="btn btn-success" onclick="saveConfig()">Save Settings</button>
-                <button class="btn btn-warning" onclick="reloadBridgeConfig()">Reload Bridge Config</button>
-                <button class="btn btn-danger" onclick="restartBridge()">Restart Bridge</button>
+                
+                <!-- Bridge Status Tab -->
+                <div id="tab-bridge" class="tab-content">
+                    <div class="settings-section">
+                        <h3>Bridge Container</h3>
+                        <div id="bridge-status"></div>
+                        <button class="btn-danger" onclick="restartBridge()">Restart Bridge</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-
+    
     <script>
         let currentConfig = {};
-        let currentLanguage = 'ko';
+        let devices = [];
+        let eventRefreshIntervals = {};
         
-        const translations = {
-            ko: {
-                'online': '온라인',
-                'offline': '오프라인',
-                'config_saved': '설정이 저장되었습니다!',
-                'config_save_failed': '설정 저장 실패: ',
-                'no_devices': '등록된 장치가 없습니다.',
-                'enabled': '활성화'
-            },
-            en: {
-                'online': 'Online',
-                'offline': 'Offline',
-                'config_saved': 'Configuration saved!',
-                'config_save_failed': 'Configuration save failed: ',
-                'no_devices': 'No registered devices.',
-                'enabled': 'Enabled'
-            }
-        };
-        
-        function changeLanguage() {
-            currentLanguage = document.getElementById('language-select').value;
-            updateLanguage();
+        // Main tab switching
+        function switchMainTab(tabName) {
+            document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(`tab-${tabName}`).classList.add('active');
+            
+            if (tabName === 'bridge') loadBridgeStatus();
         }
         
-        function updateLanguage() {
-            // Update language-specific elements
-            if (currentLanguage === 'ko') {
-                document.querySelector('.subtitle').textContent = 'IoT 장치 도구 투영 제어';
-                document.querySelector('.section-header').textContent = '장치 목록 및 Projection 설정';
-                document.querySelector('.naming-rules strong').textContent = '별칭 명명 규칙:';
-                document.querySelector('.naming-rules').innerHTML = `
-                    <strong>별칭 명명 규칙:</strong><br>
-                    • 영문자(a-z, A-Z), 숫자(0-9), 밑줄(_), 하이픈(-) 만 사용 가능<br>
-                    • 공백이나 특수문자, 한글 사용 불가<br>
-                    • 예시: take_photo, camera-shot ✅ / take photo, 사진촬영 ❌
-                `;
+        // Device sub-tab switching
+        function switchDeviceTab(deviceId, tabName) {
+            const container = document.getElementById(`device-${deviceId}`);
+            container.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            container.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            container.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            container.querySelector(`#${deviceId}-${tabName}`).classList.add('active');
+            
+            if (tabName === 'events') {
+                startEventRefresh(deviceId);
             } else {
-                document.querySelector('.subtitle').textContent = 'IoT Device Tool Projection Control';
-                document.querySelector('.section-header').textContent = 'Device List & Projection Settings';
-                document.querySelector('.naming-rules').innerHTML = `
-                    <strong>Alias Naming Rules:</strong><br>
-                    • Only letters (a-z, A-Z), numbers (0-9), underscore (_), hyphen (-) allowed<br>
-                    • No spaces, special characters, or non-ASCII characters<br>
-                    • Examples: take_photo, camera-shot ✅ / take photo, 사진촬영 ❌
-                `;
+                stopEventRefresh(deviceId);
             }
         }
         
-        function t(key) {
-            return translations[currentLanguage][key] || key;
-        }
-        
-        document.addEventListener('DOMContentLoaded', function() {
-            loadData();
-            setInterval(checkStatus, 10000);
-        });
-        
-        async function checkStatus() {
-            try {
-                const bridgeResponse = await fetch('/api/bridge/health');
-                const bridgeData = await bridgeResponse.json();
-                
-                const bridgeStatusEl = document.getElementById('bridge-status');
-                if (bridgeData.healthy) {
-                    bridgeStatusEl.textContent = `Bridge: ${t('online')}`;
-                    bridgeStatusEl.className = 'status-badge status-online';
-                } else {
-                    bridgeStatusEl.textContent = `Bridge: ${t('offline')}`;
-                    bridgeStatusEl.className = 'status-badge status-offline';
-                }
-                
-                const dockerResponse = await fetch('/api/docker/status');
-                const dockerData = await dockerResponse.json();
-                
-                const dockerStatusEl = document.getElementById('docker-status');
-                if (dockerData.running) {
-                    dockerStatusEl.textContent = `Docker: ${t('online')}`;
-                    dockerStatusEl.className = 'status-badge status-online';
-                } else {
-                    dockerStatusEl.textContent = `Docker: ${t('offline')}`;
-                    dockerStatusEl.className = 'status-badge status-offline';
-                }
-            } catch (error) {
-                console.error('Status check failed:', error);
-            }
-        }
-        
+        // Load data
         async function loadData() {
-            showLoading(true);
             try {
-                const configResponse = await fetch('/api/config');
-                currentConfig = await configResponse.json();
+                showLoading(true);
+                const [configResp, devicesResp] = await Promise.all([
+                    fetch('/api/config'),
+                    fetch('/api/devices')
+                ]);
                 
-                const devicesResponse = await fetch('/api/devices');
-                const devicesData = await devicesResponse.json();
+                currentConfig = await configResp.json();
+                devices = await devicesResp.json();
                 
-                renderDevices(devicesData);
-                renderGlobalSettings();
-                
-                showAlert('Data loaded successfully.', 'success');
+                renderDevices();
+                renderSettings();
             } catch (error) {
-                showAlert('Data loading failed: ' + error.message, 'error');
+                showAlert('Failed to load data: ' + error.message, 'error');
             } finally {
                 showLoading(false);
-                checkStatus();
             }
         }
         
-        function renderDevices(devices) {
+        function renderSettings() {
+            const global = currentConfig.global || {};
+            document.getElementById('auto-enable-devices').checked = global.auto_enable_new_devices !== false;
+            document.getElementById('auto-enable-tools').checked = global.auto_enable_new_tools !== false;
+            document.getElementById('auto-enable-events').checked = global.auto_enable_new_events === true;
+        }
+        
+        function renderDevices() {
             const container = document.getElementById('devices-container');
-            
-            if (!devices || devices.length === 0) {
-                container.innerHTML = `<p>${t('no_devices')}</p>`;
-                return;
-            }
-            
-            container.innerHTML = '';
-            devices.forEach(device => {
-                const deviceId = device.device_id;
-                const projection = currentConfig.devices[deviceId] || {};
-                
-                const deviceEl = document.createElement('div');
-                deviceEl.className = 'device-card';
-                deviceEl.innerHTML = `
-                    <div class="device-header">
-                        <div class="device-info">
-                            <h3>${device.name || deviceId}</h3>
-                            <div class="device-id">${deviceId}</div>
-                        </div>
-                        <div class="device-status">
-                            <span class="status-badge ${device.online ? 'status-online' : 'status-offline'}">
-                                ${device.online ? t('online') : t('offline')}
-                            </span>
-                            <label>
-                                <input type="checkbox" ${projection.enabled !== false ? 'checked' : ''} 
-                                       onchange="updateDeviceEnabled('${deviceId}', this.checked)"> ${t('enabled')}
-                            </label>
-                        </div>
-                    </div>
-                    <div class="device-tools">
-                        <div style="margin-bottom: 15px;">
-                            <label>Device Alias:</label>
-                            <input type="text" value="${projection.device_alias || ''}" 
-                                   onchange="updateDeviceAlias('${deviceId}', this.value)"
-                                   placeholder="Device display name">
-                        </div>
-                        <div>
-                            <strong>Tools (${device.tools?.length || 0}):</strong>
-                            <div id="tools-${deviceId}">
-                                ${renderTools(deviceId, device.tools || [], projection.tools || {})}
-                            </div>
-                        </div>
-                    </div>
-                `;
-                container.appendChild(deviceEl);
-            });
-        }
-        
-        function renderTools(deviceId, tools, toolProjections) {
-            if (!tools || tools.length === 0) {
-                return '<p>No tools available.</p>';
-            }
-            
-            return tools.map(tool => {
-                const toolName = tool.name;
-                const projection = toolProjections[toolName] || {};
+            container.innerHTML = devices.map(device => {
+                const tools = device.tools || [];
+                const actions = tools.filter(t => t.kind !== 'event');
+                const events = tools.filter(t => t.kind === 'event');
+                const online = device.online;
                 
                 return `
-                    <div class="tool-item">
-                        <div><strong>${toolName}</strong></div>
-                        <div style="font-size: 0.9em; color: #666; margin: 5px 0;">
-                            ${tool.description || 'No description'}
+                    <div class="device-card" id="device-${device.device_id}">
+                        <div class="device-header">
+                            <div class="device-name">${device.device_id}</div>
+                            <div class="device-status ${online ? 'status-online' : 'status-offline'}">
+                                ${online ? 'Online' : 'Offline'}
+                            </div>
                         </div>
-                        <div class="tool-controls">
-                            <div class="form-group">
-                                <label>Enable</label>
-                                <input type="checkbox" ${projection.enabled !== false ? 'checked' : ''} 
-                                       onchange="updateToolEnabled('${deviceId}', '${toolName}', this.checked)">
-                            </div>
-                            <div class="form-group">
-                                <label>Alias</label>
-                                <input type="text" value="${projection.alias || ''}" 
-                                       onchange="updateToolAlias('${deviceId}', '${toolName}', this.value)"
-                                       placeholder="Tool display name">
-                            </div>
-                            <div class="form-group">
-                                <label>Description (override)</label>
-                                <input type="text" value="${projection.description || ''}" 
-                                       onchange="updateToolDescription('${deviceId}', '${toolName}', this.value)"
-                                       placeholder="Custom description (optional)">
-                            </div>
+                        
+                        <div class="tabs" style="border-bottom: 1px solid #ddd; margin-bottom: 15px;">
+                            <button class="tab active" data-tab="actions" onclick="switchDeviceTab('${device.device_id}', 'actions')">
+                                Actions (${actions.length})
+                            </button>
+                            <button class="tab" data-tab="events" onclick="switchDeviceTab('${device.device_id}', 'events')">
+                                Events (${events.length})
+                            </button>
+                        </div>
+                        
+                        <!-- Actions Tab -->
+                        <div id="${device.device_id}-actions" class="tab-content active">
+                            ${renderToolList(device.device_id, actions, 'action')}
+                        </div>
+                        
+                        <!-- Events Tab -->
+                        <div id="${device.device_id}-events" class="tab-content">
+                            ${renderToolList(device.device_id, events, 'event')}
+                            ${events.length > 0 ? `
+                                <div style="margin-top: 20px;">
+                                    <h4>Event Log (Real-time)</h4>
+                                    <button class="btn-primary" onclick="clearEventLog('${device.device_id}')">Clear Log</button>
+                                    <div class="event-log" id="event-log-${device.device_id}">
+                                        <div style="color: #64b5f6;">Waiting for events...</div>
+                                    </div>
+                                </div>
+                            ` : ''}
                         </div>
                     </div>
                 `;
             }).join('');
         }
         
-        function renderGlobalSettings() {
-            const autoDevices = document.getElementById('auto-enable-devices');
-            const autoTools = document.getElementById('auto-enable-tools');
+        function renderToolList(deviceId, tools, kind) {
+            if (tools.length === 0) {
+                return `<div style="color: #999; padding: 20px; text-align: center;">No ${kind}s available</div>`;
+            }
             
-            autoDevices.checked = currentConfig.global?.auto_enable_new_devices !== false;
-            autoTools.checked = currentConfig.global?.auto_enable_new_tools !== false;
+            return `<div class="tool-list">${tools.map(tool => {
+                const toolConfig = currentConfig.devices?.[deviceId]?.tools?.[tool.name] || {};
+                const enabled = toolConfig.enabled !== false;
+                
+                if (kind === 'event') {
+                    const signals = tool.signals?.event_types || [];
+                    return `
+                        <div class="tool-item event-item">
+                            <div class="tool-header">
+                                <div class="tool-name">${tool.name}</div>
+                                <label class="switch tool-toggle">
+                                    <input type="checkbox" ${enabled ? 'checked' : ''} 
+                                           onchange="toggleTool('${deviceId}', '${tool.name}', '${kind}', this.checked)">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="tool-desc">${tool.description || 'No description'}</div>
+                            ${signals.length > 0 ? `
+                                <div class="event-signals">
+                                    ${signals.map(s => `<span class="signal-badge">${s}</span>`).join('')}
+                                </div>
+                            ` : ''}
+                            ${enabled ? `<button class="event-test-btn" onclick="testEventSubscribe('${deviceId}', '${tool.name}')">Test Subscribe</button>` : ''}
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div class="tool-item">
+                            <div class="tool-header">
+                                <div class="tool-name">${tool.name}</div>
+                                <label class="switch tool-toggle">
+                                    <input type="checkbox" ${enabled ? 'checked' : ''} 
+                                           onchange="toggleTool('${deviceId}', '${tool.name}', '${kind}', this.checked)">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="tool-desc">${tool.description || 'No description'}</div>
+                        </div>
+                    `;
+                }
+            }).join('')}</div>`;
         }
         
-        function updateDeviceEnabled(deviceId, enabled) {
-            ensureDeviceExists(deviceId);
-            currentConfig.devices[deviceId].enabled = enabled;
-        }
-        
-        function updateDeviceAlias(deviceId, alias) {
-            ensureDeviceExists(deviceId);
-            currentConfig.devices[deviceId].device_alias = alias || null;
-        }
-        
-        function updateToolEnabled(deviceId, toolName, enabled) {
-            ensureDeviceExists(deviceId);
-            ensureToolExists(deviceId, toolName);
-            currentConfig.devices[deviceId].tools[toolName].enabled = enabled;
-        }
-        
-        function updateToolAlias(deviceId, toolName, alias) {
-            ensureDeviceExists(deviceId);
-            ensureToolExists(deviceId, toolName);
-            currentConfig.devices[deviceId].tools[toolName].alias = alias || null;
-        }
-        
-        function updateToolDescription(deviceId, toolName, description) {
-            ensureDeviceExists(deviceId);
-            ensureToolExists(deviceId, toolName);
-            currentConfig.devices[deviceId].tools[toolName].description = description || null;
-        }
-        
-        function ensureDeviceExists(deviceId) {
+        async function toggleTool(deviceId, toolName, kind, enabled) {
             if (!currentConfig.devices) currentConfig.devices = {};
             if (!currentConfig.devices[deviceId]) {
-                currentConfig.devices[deviceId] = {
-                    enabled: true,
-                    device_alias: null,
-                    tools: {}
-                };
+                currentConfig.devices[deviceId] = { enabled: true, device_alias: null, tools: {} };
+            }
+            if (!currentConfig.devices[deviceId].tools[toolName]) {
+                currentConfig.devices[deviceId].tools[toolName] = { alias: null, description: null };
+            }
+            
+            currentConfig.devices[deviceId].tools[toolName].enabled = enabled;
+            currentConfig.devices[deviceId].tools[toolName].kind = kind;
+            
+            await saveConfig();
+        }
+        
+        async function testEventSubscribe(deviceId, eventName) {
+            try {
+                showAlert(`Testing ${eventName} subscription...`, 'success');
+                // Projection Manager를 통해 Bridge에 subscribe 요청
+                const response = await fetch(`/api/bridge/invoke`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        device_id: deviceId,
+                        tool: eventName,
+                        args: { op: 'subscribe', interval_ms: 3000 }
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.ok !== false) {
+                    showAlert(`Subscribed to ${eventName}. Watch the event log below.`, 'success');
+                    startEventRefresh(deviceId);
+                } else {
+                    const errorMsg = result.error?.message || result.message || 'Unknown error';
+                    showAlert('Subscribe failed: ' + errorMsg, 'error');
+                }
+            } catch (error) {
+                showAlert('Subscribe error: ' + error.message, 'error');
             }
         }
         
-        function ensureToolExists(deviceId, toolName) {
-            if (!currentConfig.devices[deviceId].tools[toolName]) {
-                currentConfig.devices[deviceId].tools[toolName] = {
-                    enabled: true,
-                    alias: null,
-                    description: null
-                };
+        function startEventRefresh(deviceId) {
+            if (eventRefreshIntervals[deviceId]) return;
+            
+            eventRefreshIntervals[deviceId] = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/devices/${deviceId}/events?limit=10`);
+                    const data = await response.json();
+                    
+                    const logDiv = document.getElementById(`event-log-${deviceId}`);
+                    if (logDiv && data.events.length > 0) {
+                        logDiv.innerHTML = data.events.map(e => {
+                            const payload = e.payload;
+                            const text = payload.result?.text || '';
+                            const eventType = payload.result?.assets?.[0]?.event_type || 'unknown';
+                            return `
+                                <div class="event-log-entry">
+                                    <span class="event-log-time">[${e.timestamp}]</span>
+                                    <span class="event-log-type">${eventType}</span>: ${text}
+                                </div>
+                            `;
+                        }).join('');
+                    }
+                } catch (error) {
+                    console.error('Event refresh error:', error);
+                }
+            }, 2000);
+        }
+        
+        function stopEventRefresh(deviceId) {
+            if (eventRefreshIntervals[deviceId]) {
+                clearInterval(eventRefreshIntervals[deviceId]);
+                delete eventRefreshIntervals[deviceId];
+            }
+        }
+        
+        async function clearEventLog(deviceId) {
+            try {
+                await fetch(`/api/devices/${deviceId}/events`, { method: 'DELETE' });
+                document.getElementById(`event-log-${deviceId}`).innerHTML = 
+                    '<div style="color: #64b5f6;">Event log cleared. Waiting for new events...</div>';
+                showAlert('Event log cleared', 'success');
+            } catch (error) {
+                showAlert('Failed to clear log: ' + error.message, 'error');
             }
         }
         
         async function saveConfig() {
-            currentConfig.global = {
-                auto_enable_new_devices: document.getElementById('auto-enable-devices').checked,
-                auto_enable_new_tools: document.getElementById('auto-enable-tools').checked
-            };
-            
             try {
-                showLoading(true);
                 const response = await fetch('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(currentConfig)
                 });
                 
-                const result = await response.json();
-                
                 if (response.ok) {
-                    showAlert(t('config_saved'), 'success');
+                    showAlert('Configuration saved', 'success');
+                    return true;
                 } else {
-                    showAlert(t('config_save_failed') + result.message, 'error');
+                    showAlert('Save failed', 'error');
+                    return false;
                 }
             } catch (error) {
-                showAlert(t('config_save_failed') + error.message, 'error');
-            } finally {
-                showLoading(false);
+                showAlert('Save error: ' + error.message, 'error');
+                return false;
             }
         }
         
-        async function reloadBridgeConfig() {
+        async function saveGlobalSettings() {
+            currentConfig.global = {
+                auto_enable_new_devices: document.getElementById('auto-enable-devices').checked,
+                auto_enable_new_tools: document.getElementById('auto-enable-tools').checked,
+                auto_enable_new_events: document.getElementById('auto-enable-events').checked
+            };
+            await saveConfig();
+        }
+        
+        async function loadBridgeStatus() {
             try {
-                showLoading(true);
-                const response = await fetch('/api/bridge/reload', { method: 'POST' });
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showAlert('Bridge configuration reloaded: ' + result.message, 'success');
-                } else {
-                    showAlert('Bridge configuration reload failed: ' + result.message, 'error');
-                }
+                const response = await fetch('/api/docker/status');
+                const status = await response.json();
+                document.getElementById('bridge-status').innerHTML = `
+                    <p>Status: <strong>${status.status}</strong></p>
+                    <p>Container: ${status.name || 'N/A'}</p>
+                    <p>ID: ${status.id || 'N/A'}</p>
+                `;
             } catch (error) {
-                showAlert('Bridge configuration reload failed: ' + error.message, 'error');
-            } finally {
-                showLoading(false);
+                document.getElementById('bridge-status').innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
             }
         }
         
@@ -610,19 +758,15 @@ def get_html_template():
             try {
                 showLoading(true);
                 const response = await fetch('/api/docker/restart', { method: 'POST' });
-                const result = await response.json();
                 
                 if (response.ok) {
-                    showAlert('Bridge container restarted successfully!', 'success');
-                    setTimeout(() => {
-                        checkStatus();
-                        loadData();
-                    }, 3000);
+                    showAlert('Bridge restarted successfully!', 'success');
+                    setTimeout(() => loadData(), 3000);
                 } else {
-                    showAlert('Bridge restart failed: ' + result.message, 'error');
+                    showAlert('Restart failed', 'error');
                 }
             } catch (error) {
-                showAlert('Bridge restart failed: ' + error.message, 'error');
+                showAlert('Restart error: ' + error.message, 'error');
             } finally {
                 showLoading(false);
             }
@@ -637,87 +781,16 @@ def get_html_template():
             alertEl.textContent = message;
             alertEl.className = `alert alert-${type}`;
             alertEl.style.display = 'block';
-            
-            setTimeout(() => {
-                alertEl.style.display = 'none';
-            }, 5000);
+            setTimeout(() => { alertEl.style.display = 'none'; }, 5000);
         }
+        
+        // Initialize
+        loadData();
+        setInterval(loadData, 30000); // Refresh every 30 seconds
     </script>
 </body>
 </html>'''
 
-@app.get("/", response_class=HTMLResponse)
-def projection_manager_ui():
-    """Project Saba MCP Manager Web Interface"""
-    return HTMLResponse(content=get_html_template())
-
-# ========= API Endpoints =========
-
-@app.get("/healthz")
-def healthz():
-    return {"ok": True, "ts": now_iso(), "service": "projection-manager", "port": API_PORT}
-
-@app.get("/api/config")
-def get_config():
-    """Get current projection configuration"""
-    return config_manager.load_config()
-
-@app.post("/api/config")
-def save_config(config: dict):
-    """Save projection configuration"""
-    if config_manager.save_config(config):
-        return {"ok": True, "message": "Configuration saved successfully"}
-    else:
-        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, "Failed to save configuration")
-
-@app.get("/api/devices")
-def get_devices():
-    """Get devices from bridge API"""
-    return bridge_api.get_devices()
-
-@app.get("/api/devices/{device_id}")
-def get_device(device_id: str):
-    """Get specific device from bridge API"""
-    return device
-
-@app.get("/api/bridge/health")
-def bridge_health():
-    """Check bridge API health"""
-    healthy = bridge_api.health_check()
-    return {
-        "healthy": healthy,
-        "url": BRIDGE_API_URL,
-        "port": 8083 if healthy else None
-    }
-
-@app.post("/api/bridge/reload")
-def bridge_reload():
-    """Trigger bridge configuration reload"""
-    try:
-        # Bridge API doesn't have reload endpoint in the clean version,
-        # so we'll just return a success message with instruction
-        return {
-            "ok": True,
-            "message": "Bridge configuration will be reloaded on next container restart",
-            "instruction": "Use 'Bridge 재시작' button to apply changes"
-        }
-    except Exception as e:
-        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, f"Failed to reload bridge config: {e}")
-
-@app.get("/api/docker/status")
-def docker_status():
-    """Get Docker container status"""
-    return docker_manager.get_bridge_status()
-
-@app.post("/api/docker/restart")
-def docker_restart():
-    """Restart bridge container"""
-    if docker_manager.restart_bridge_container():
-        return {"ok": True, "message": "Bridge container restarted successfully"}
-    else:
-        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, "Failed to restart bridge container")
-
-# ========= Main =========
 def pick_free_port(base: int, tries: int) -> int | None:
     for p in range(base, base + tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -736,10 +809,10 @@ if __name__ == "__main__":
         if pf:
             ACTIVE_API_PORT = pf
     
-    log(f"[boot] python={sys.version}")
-    log(f"[boot] Projection Manager API_PORT={ACTIVE_API_PORT}")
+    log(f"[boot] Projection Manager v2 API_PORT={ACTIVE_API_PORT}")
     log(f"[boot] PROJECTION_CONFIG_PATH={PROJECTION_CONFIG_PATH}")
     log(f"[boot] BRIDGE_API_URL={BRIDGE_API_URL}")
+    log(f"[boot] MQTT_HOST={MQTT_HOST}:{MQTT_PORT}")
     log(f"[boot] Web Interface: http://0.0.0.0:{ACTIVE_API_PORT}")
     
     uvicorn.run(app, host="0.0.0.0", port=int(ACTIVE_API_PORT), log_level="warning", access_log=False)

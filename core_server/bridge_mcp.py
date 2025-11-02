@@ -64,19 +64,27 @@ class ToolProjectionStore:
                     self.config = json.load(f)
                 log(f"[PROJECTION] Loaded config from {self.config_path}")
             else:
-                # Create default config
+                # Create default config with EVENT support
                 self.config = {
                     "devices": {},
                     "global": {
                         "auto_enable_new_devices": True,
-                        "auto_enable_new_tools": True
+                        "auto_enable_new_tools": True,
+                        "auto_enable_new_events": False  # EVENT는 기본 숨김
                     }
                 }
                 self.save_config()
                 log(f"[PROJECTION] Created default config at {self.config_path}")
         except Exception as e:
             log(f"[PROJECTION] Error loading config: {e}")
-            self.config = {"devices": {}, "global": {"auto_enable_new_devices": True, "auto_enable_new_tools": True}}
+            self.config = {
+                "devices": {}, 
+                "global": {
+                    "auto_enable_new_devices": True, 
+                    "auto_enable_new_tools": True,
+                    "auto_enable_new_events": False
+                }
+            }
     
     def save_config(self):
         """Save current configuration to file"""
@@ -98,17 +106,25 @@ class ToolProjectionStore:
             return projection["enabled"]
         return self.config.get("global", {}).get("auto_enable_new_devices", True)
     
-    def is_tool_enabled(self, device_id: str, tool_name: str) -> bool:
-        """Check if specific tool is enabled in projection"""
+    def is_tool_enabled(self, device_id: str, tool_name: str, tool_kind: str = "action") -> bool:
+        """Check if specific tool is enabled in projection (kind-aware)"""
         projection = self.get_device_projection(device_id)
         tools = projection.get("tools", {})
         tool_config = tools.get(tool_name, {})
         
+        # 명시적 설정이 있으면 그걸 따름
         if "enabled" in tool_config:
             return tool_config["enabled"]
-        if self.is_device_enabled(device_id):
+        
+        # 디바이스가 비활성화면 모든 툴 비활성
+        if not self.is_device_enabled(device_id):
+            return False
+        
+        # 종류별 기본값
+        if tool_kind == "event":
+            return self.config.get("global", {}).get("auto_enable_new_events", False)
+        else:
             return self.config.get("global", {}).get("auto_enable_new_tools", True)
-        return False
     
     def get_device_alias(self, device_id: str, device_name: Optional[str] = None) -> str:
         """Get device alias or fallback to original name"""
@@ -134,13 +150,21 @@ class ToolProjectionStore:
         if projected_desc is None:
             projected_desc = original_tool.get("description", "")
         
+        tool_kind = original_tool.get("kind", "action")
+        
         result = {
             "name": projected_name,
             "description": projected_desc,
             "parameters": original_tool.get("parameters", {}),
             "original_name": tool_name,
-            "device_id": device_id
+            "device_id": device_id,
+            "kind": tool_kind
         }
+        
+        # EVENT 전용 필드
+        if tool_kind == "event":
+            result["capabilities"] = original_tool.get("capabilities", {})
+            result["signals"] = original_tool.get("signals", {})
         
         return result
     
@@ -156,9 +180,17 @@ class ToolProjectionStore:
                 
                 for tool in tools:
                     tool_name = tool.get("name", "")
+                    tool_kind = tool.get("kind", "action")
                     if tool_name:
+                        # KIND에 따라 다른 기본값
+                        if tool_kind == "event":
+                            default_enabled = self.config.get("global", {}).get("auto_enable_new_events", False)
+                        else:
+                            default_enabled = self.config.get("global", {}).get("auto_enable_new_tools", True)
+                        
                         device_config["tools"][tool_name] = {
-                            "enabled": self.config.get("global", {}).get("auto_enable_new_tools", True),
+                            "enabled": default_enabled,
+                            "kind": tool_kind,
                             "alias": None,
                             "description": None
                         }
@@ -553,6 +585,63 @@ def res_projections() -> Resource:
         text=json.dumps(projection_summary, indent=2)
     )
 
+@mcp.resource("bridge://device/{device_id}/events")
+def res_device_events(device_id: str) -> Resource:
+    """
+    Get EVENT capabilities for a device.
+    Events cannot be called directly via MCP but can be integrated via SDK for vibe coding workflows.
+    """
+    device = device_store.get(device_id)
+    if not device:
+        return Resource(
+            uri=f"bridge://device/{device_id}/events",
+            name="device_events",
+            description="Device not found",
+            mimeType="application/json",
+            text=json.dumps({"error": "device not found"})
+        )
+    
+    tools = device.get("tools", [])
+    events = []
+    
+    for tool in tools:
+        kind = tool.get("kind", "action")
+        if kind == "event":
+            tool_name = tool.get("name", "")
+            
+            # Projection 체크 (enabled인 것만)
+            if not projection_store.is_tool_enabled(device_id, tool_name, kind):
+                continue
+            
+            projected = projection_store.get_tool_projection(device_id, tool_name, tool)
+            
+            event_info = {
+                "name": projected["name"],
+                "original_name": projected["original_name"],
+                "description": projected["description"],
+                "parameters": projected["parameters"],
+                "capabilities": projected.get("capabilities", {}),
+                "signals": projected.get("signals", {}),
+                "kind": "event"
+            }
+            events.append(event_info)
+    
+    result = {
+        "device_id": device_id,
+        "device_alias": projection_store.get_device_alias(device_id, device.get('name')),
+        "events": events,
+        "count": len(events),
+        "note": "These events cannot be invoked directly via MCP. Use SDK integration for vibe coding workflows."
+    }
+    
+    return Resource(
+        uri=f"bridge://device/{device_id}/events",
+        name="device_events",
+        description=f"EVENT capabilities for device {device_id} (for SDK integration)",
+        mimeType="application/json",
+        text=json.dumps(result, indent=2)
+    )
+
 # ---- Static Tools ----
 @mcp.tool()
 def invoke(device_id: str, tool: str, args: dict | None = None) -> List[Union[ImageContent, TextContent]]:
@@ -567,22 +656,27 @@ def invoke(device_id: str, tool: str, args: dict | None = None) -> List[Union[Im
 
 @mcp.tool()
 def list_devices() -> List[TextContent]:
-    """List devices from announce/status cache with projection info."""
+    """List devices from announce/status cache with projection info (ACTION/EVENT counts)."""
     devices = device_store.list()
     device_summary = []
     for device in devices:
         device_id = device['device_id']
         status = "online" if device.get("online", False) else "offline"
-        tools_count = len(device.get("tools", []))
+        
+        # ACTION/EVENT 구분
+        tools = device.get("tools", [])
+        actions_count = len([t for t in tools if t.get("kind", "action") == "action"])
+        events_count = len([t for t in tools if t.get("kind") == "event"])
         
         device_alias = projection_store.get_device_alias(device_id, device.get('name'))
         is_enabled = projection_store.is_device_enabled(device_id)
         
-        projected_tools = [t for t in tool_registry.list_all_tools() if t['device_id'] == device_id]
-        projected_count = len(projected_tools)
+        # Projected ACTION tools만 카운트 (EVENT는 MCP tool이 아님)
+        projected_actions = [t for t in tool_registry.list_all_tools() if t['device_id'] == device_id]
+        projected_count = len(projected_actions)
         
         device_summary.append(
-            f"• {device_id} → '{device_alias}' ({status}, {projected_count}/{tools_count} tools projected, {'enabled' if is_enabled else 'disabled'})"
+            f"• {device_id} → '{device_alias}' ({status}, {projected_count}/{actions_count} actions, {events_count} events, {'enabled' if is_enabled else 'disabled'})"
         )
     
     summary_text = f"Found {len(devices)} devices:\n" + "\n".join(device_summary)
@@ -590,7 +684,7 @@ def list_devices() -> List[TextContent]:
 
 @mcp.tool()
 def get_tools(device_id: str) -> List[TextContent]:
-    """List a device's announced tools with projection status."""
+    """List a device's announced tools with projection status (ACTION and EVENT)."""
     d = device_store.get(device_id)
     if not d:
         return [TextContent(type="text", text=f"Error: device_id '{device_id}' not found")]
@@ -599,27 +693,46 @@ def get_tools(device_id: str) -> List[TextContent]:
     if not tools:
         return [TextContent(type="text", text=f"Device {device_id} has no announced tools")]
     
-    tool_summary = []
+    action_summary = []
+    event_summary = []
+    
     for tool in tools:
         name = tool.get("name", "unknown")
         desc = tool.get("description", "")
+        kind = tool.get("kind", "action")
         
-        is_enabled = projection_store.is_tool_enabled(device_id, name)
+        is_enabled = projection_store.is_tool_enabled(device_id, name, kind)
         if is_enabled:
             projected_tool = projection_store.get_tool_projection(device_id, name, tool)
             projected_name = projected_tool["name"]
             projected_desc = projected_tool["description"]
-            tool_summary.append(f"• {name} → '{projected_name}' (enabled): {projected_desc}")
+            line = f"• {name} → '{projected_name}' (enabled): {projected_desc}"
         else:
-            tool_summary.append(f"• {name} (disabled): {desc}")
+            line = f"• {name} (disabled): {desc}"
+        
+        if kind == "event":
+            event_summary.append(line)
+        else:
+            action_summary.append(line)
     
     device_alias = projection_store.get_device_alias(device_id, d.get('name'))
-    summary_text = f"Device {device_id} → '{device_alias}' tools ({len(tools)} total):\n" + "\n".join(tool_summary)
+    
+    result_lines = [f"Device {device_id} → '{device_alias}' ({len(tools)} tools total)"]
+    
+    if action_summary:
+        result_lines.append(f"\nACTIONS ({len(action_summary)}):")
+        result_lines.extend(action_summary)
+    
+    if event_summary:
+        result_lines.append(f"\nEVENTS ({len(event_summary)}) [Use bridge://device/{device_id}/events for details]:")
+        result_lines.extend(event_summary)
+    
+    summary_text = "\n".join(result_lines)
     return [TextContent(type="text", text=summary_text)]
 
 # ---- Dynamic Tool Creation and Registration ----
 def register_dynamic_tools_for_device(device_id: str):
-    """Register dynamic projected tools for a specific device with FastMCP using proper schemas"""
+    """Register dynamic projected tools for a specific device with FastMCP using proper schemas (ACTION only)"""
     device = device_store.get(device_id)
     if not device or not device.get("tools"):
         return
@@ -628,10 +741,17 @@ def register_dynamic_tools_for_device(device_id: str):
     
     for tool_info in device["tools"]:
         tool_name = tool_info.get("name", "")
+        tool_kind = tool_info.get("kind", "action")
+        
         if not tool_name:
             continue
         
-        if not projection_store.is_tool_enabled(device_id, tool_name):
+        # EVENT는 MCP Tool로 등록하지 않음 (Resource로만 노출)
+        if tool_kind == "event":
+            log(f"[MCP] Skipping EVENT (not an MCP tool): {tool_name} for device {device_id}")
+            continue
+        
+        if not projection_store.is_tool_enabled(device_id, tool_name, tool_kind):
             log(f"[MCP] Skipping disabled tool: {tool_name} for device {device_id}")
             continue
         
@@ -640,7 +760,7 @@ def register_dynamic_tools_for_device(device_id: str):
         
         tool_key = f"{projected_name}_{device_id}"
         
-        log(f"[MCP] Processing tool: {tool_name} -> {projected_name} (key: {tool_key})")
+        log(f"[MCP] Processing ACTION tool: {tool_name} -> {projected_name} (key: {tool_key})")
         
         if tool_registry.get_registered_function(tool_key):
             log(f"[MCP] Tool {tool_key} already registered, skipping")
@@ -717,6 +837,26 @@ def get_device_api(device_id: str):
     if not d:
         raise HTTPException(HTTPStatus.NOT_FOUND, "device not found")
     return d
+
+@app.post("/invoke")
+def invoke_api(payload: dict):
+    """HTTP endpoint for invoking device tools (for Projection Manager)"""
+    device_id = payload.get("device_id")
+    tool = payload.get("tool")
+    args = payload.get("args", {})
+    
+    if not device_id or not tool:
+        raise HTTPException(HTTPStatus.BAD_REQUEST, "device_id and tool are required")
+    
+    log(f"[API] Invoke request: device={device_id}, tool={tool}, args={args}")
+    
+    ok, resp = publish_cmd(device_id, tool, args)
+    
+    if not ok:
+        error_msg = resp.get("error", {}).get("message", "Unknown error")
+        return {"ok": False, "error": error_msg, "response": resp}
+    
+    return {"ok": True, "response": resp}
 
 # Mount MCP SSE endpoint - 모든 초기화 후에 실행
 try:
