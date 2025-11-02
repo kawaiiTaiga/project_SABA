@@ -190,7 +190,10 @@ Each example demonstrates semantic function design and best practices for LLM-na
 
 ## Development Status
 
-### Current Version: v0.1
+### Current Version: v0.2
+- Tool for event handling
+
+### version v0.1
 - Core framework with provisioning and runtime systems
 - Tool registry and MQTT communication
 - Basic examples and templates
@@ -205,19 +208,11 @@ Each example demonstrates semantic function design and best practices for LLM-na
 
 ---
 
-## Philosophy: Beyond Traditional IoT
-
-This SDK embodies a fundamental shift in how we think about smart devices. Instead of building remote controls for hardware, we're building semantic interfaces for artificial intelligence.
-
-Every design decision prioritizes **AI comprehension** over human convenience. This means clear function names, meaningful parameters, and consistent result formats that let LLMs naturally reason about and combine device capabilities.
-
-The result is hardware that doesn't just connect to the internet—it connects to intelligence.
-
----
 
 ## License
 
 Licensed under the **Apache License 2.0**. See the [LICENSE](../LICENSE) file for complete details.
+
 
 
 
