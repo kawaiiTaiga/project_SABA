@@ -58,7 +58,7 @@ String ProvisioningService::htmlEscape(const String& s){
 String ProvisioningService::buildProvisionPage(const String& did, bool doScan){
   String body;
   body.reserve(6000);
-  body += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>MCP-Lite Setup</title><style>body{font-family:sans-serif;max-width:560px;margin:20px auto;padding:0 12px}label{display:block;margin:.6rem 0 .2rem}input,select{width:100%;padding:.6rem;font-size:1rem}button{padding:.6rem 1rem;margin-top:1rem}small{color:#666}</style></head><body><h2>MCP-Lite Provisioning</h2>");
+  body += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>MCP-Lite Setup</title><style>body{font-family:sans-serif;max-width:560px;margin:20px auto;padding:0 12px}label{display:block;margin:.6rem 0 .2rem}input,select{width:100%;padding:.6rem;font-size:1rem}button{padding:.6rem 1rem;margin-top:1rem}small{color:#666}</style></head><body><h2>Provisioning</h2>");
   if(doScan){
     int n = WiFi.scanNetworks();
     body += F("<details open><summary>Scan Wi-Fi</summary><label>SSID</label><select id='ssid'>");
@@ -85,7 +85,7 @@ String ProvisioningService::buildProvisionPage(const String& did, bool doScan){
   body += htmlEscape(did);
   body += F("' required>"
             "<button type='submit'>Save & Reboot</button>"
-            "</form><hr><p><small>Project mcp-lite</small></p></body></html>");
+            "</form><hr><p><small>Project saba</small></p></body></html>");
   return body;
 }
 
@@ -93,6 +93,10 @@ void ProvisioningService::startPortal(const String& defaultDid){
   WiFi.mode(WIFI_AP);
   String ssid = apSsid();
   WiFi.softAP(ssid.c_str(), "12345678");
+  
+  //ESP-32-C3-MINI-ERROR
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+
   delay(200);
   IPAddress apIP = WiFi.softAPIP();
 
@@ -134,6 +138,11 @@ bool ProvisioningService::connectSTA(const String& ssid, const String& pass, uns
   WiFi.setSleep(false);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
+
+  //ESP-32-C3-MINI-ERROR
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+
+
   unsigned long start = millis();
   while(WiFi.status()!=WL_CONNECTED && (millis()-start < timeoutMs)){ delay(500); }
   return WiFi.status()==WL_CONNECTED;

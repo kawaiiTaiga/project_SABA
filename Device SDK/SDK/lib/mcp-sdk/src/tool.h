@@ -35,4 +35,5 @@ struct ITool{
   virtual bool invoke(JsonObjectConst args, ObservationBuilder& out)=0;
   // optional, default no-op
   virtual void register_http(WebServer& srv) {}
+  virtual void tick(uint32_t /*now_ms*/) {}
 };
