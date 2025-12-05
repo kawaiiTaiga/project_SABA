@@ -1,6 +1,6 @@
 # reflex/triggers/base.py
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 import importlib
 import inspect
 from pathlib import Path
@@ -11,6 +11,10 @@ class TriggerBase(ABC):
     # 클래스 변수: 등록된 Trigger 타입들
     _registry: Dict[str, type] = {}
     
+    # 메타데이터
+    description: str = "Base Trigger"
+    schema: Dict[str, Any] = {}
+    
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.type = config.get('type')
@@ -19,7 +23,16 @@ class TriggerBase(ABC):
             raise ValueError("Trigger config must have 'type' field")
     
     @abstractmethod
-    async def check(self, event: Dict[str, Any], state: Dict[str, Any]) -> bool:
+    async def check(self, event: Dict[str, Any], state: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Check if trigger should fire.
+        
+        Returns:
+            Tuple[bool, Dict[str, Any]]: (fired, context_dict)
+            - fired: Whether the trigger fired
+            - context_dict: Trigger context (type, cron, fired_at, etc.)
+              All values should be strings for template compatibility.
+        """
         pass
     
     @abstractmethod

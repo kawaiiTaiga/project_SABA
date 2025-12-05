@@ -1,14 +1,27 @@
 # reflex/actions/base.py
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Tuple, Optional
 import importlib
 import inspect
+from datetime import datetime
+
+class TriggerContext(dict):
+    """Trigger context as dict with attribute access"""
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(f"'{type(self).__name__}' has no attribute '{key}'")
 
 class ActionBase(ABC):
     """Action 추상 클래스"""
     
     # 클래스 변수: 등록된 Action 타입들
     _registry: Dict[str, type] = {}
+    
+    # 메타데이터
+    description: str = "Base Action"
+    schema: Dict[str, Any] = {}
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -22,8 +35,18 @@ class ActionBase(ABC):
         self, 
         event: Dict[str, Any], 
         state: Dict[str, Any],
-        tools: Dict[str, Callable]
+        tools: Dict[str, Callable],
+        trigger: Dict[str, Any]
     ) -> Dict[str, Any]:
+        """
+        Execute the action.
+        
+        Args:
+            event: Current event data
+            state: Current world state
+            tools: Available tools
+            trigger: Trigger context dict (type, cron, fired_at, etc.)
+        """
         pass
     
     @abstractmethod

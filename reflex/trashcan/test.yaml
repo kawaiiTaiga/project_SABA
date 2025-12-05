@@ -1,0 +1,14 @@
+id: test
+name: Test
+trigger:
+  type: schedule
+  cron: '* * * * *'
+action:
+  type: tool
+  tool_name: ''
+  arguments: null
+tools:
+- add
+lifecycle:
+  type: persistent
+enabled: true

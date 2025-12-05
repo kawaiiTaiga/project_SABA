@@ -1,0 +1,67 @@
+id: test
+name: Test
+trigger:
+  type: schedule
+  cron: '* * * * *'
+action:
+  type: tool
+  arguments: '{"a": "{{trigger.fired_at[14:16]}}", "b": "5"}'
+tools:
+- simple.add
+lifecycle:
+  type: temporary
+  ttl_sec: 3600
+  max_runs: 5
+  cooldown_sec: 1
+enabled: true
+logs:
+- time: '2025-12-05 16:54:00'
+  status: INFO
+  message: 'Triggered (context: {''type'': ''schedule'', ''cron'': ''* * * * *'',
+    ''next_run'': ''2025-12-05T16:55:00'', ''checked_at'': ''2025-12-05T16:54:00.127726'',
+    ''fired_at'': ''2025-12-05T16:54:00.127726''})'
+- time: '2025-12-05 16:54:00'
+  status: RESULT
+  message: "Output: {\n  \"success\": true,\n  \"result\": \"54.0 + 5.0 = 59.0\"\n\
+    }"
+- time: '2025-12-05 16:54:00'
+  status: INFO
+  message: 'Executed OK. Runs: 1'
+- time: '2025-12-05 16:55:00'
+  status: INFO
+  message: 'Triggered (context: {''type'': ''schedule'', ''cron'': ''* * * * *'',
+    ''next_run'': ''2025-12-05T16:56:00'', ''checked_at'': ''2025-12-05T16:55:00.219316'',
+    ''fired_at'': ''2025-12-05T16:55:00.219316''})'
+- time: '2025-12-05 16:55:00'
+  status: RESULT
+  message: "Output: {\n  \"success\": true,\n  \"result\": \"55.0 + 5.0 = 60.0\"\n\
+    }"
+- time: '2025-12-05 16:55:00'
+  status: INFO
+  message: 'Executed OK. Runs: 2'
+- time: '2025-12-05 16:56:00'
+  status: INFO
+  message: 'Triggered (context: {''type'': ''schedule'', ''cron'': ''* * * * *'',
+    ''next_run'': ''2025-12-05T16:57:00'', ''checked_at'': ''2025-12-05T16:56:00.400599'',
+    ''fired_at'': ''2025-12-05T16:56:00.400599''})'
+- time: '2025-12-05 16:56:00'
+  status: RESULT
+  message: "Output: {\n  \"success\": true,\n  \"result\": \"56.0 + 5.0 = 61.0\"\n\
+    }"
+- time: '2025-12-05 16:56:00'
+  status: INFO
+  message: 'Executed OK. Runs: 3'
+- time: '2025-12-05 16:57:00'
+  status: INFO
+  message: 'Triggered (context: {''type'': ''schedule'', ''cron'': ''* * * * *'',
+    ''next_run'': ''2025-12-05T16:58:00'', ''checked_at'': ''2025-12-05T16:57:00.518405'',
+    ''fired_at'': ''2025-12-05T16:57:00.518405''})'
+- time: '2025-12-05 16:57:00'
+  status: RESULT
+  message: "Output: {\n  \"success\": true,\n  \"result\": \"57.0 + 5.0 = 62.0\"\n\
+    }"
+- time: '2025-12-05 16:57:00'
+  status: INFO
+  message: 'Executed OK. Runs: 4'
+metadata:
+  last_run: '2025-12-05 16:57:00'

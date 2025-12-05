@@ -1,12 +1,63 @@
-# reflex/actions/llm.py - 디버깅 버전
+# reflex/actions/llm.py
+import re
 from typing import Dict, Any, Callable
 import os
 from anthropic import AsyncAnthropic
 from .base import ActionBase
 
+
+class _DictWrapper:
+    """Dict를 attribute access 가능하게 래핑"""
+    def __init__(self, data: Dict[str, Any]):
+        self._data = data
+    
+    def __getattr__(self, key):
+        if key.startswith('_'):
+            return super().__getattribute__(key)
+        try:
+            val = self._data[key]
+            if isinstance(val, dict):
+                return _DictWrapper(val)
+            return val
+        except KeyError:
+            raise AttributeError(f"No attribute '{key}'")
+    
+    def __getitem__(self, key):
+        val = self._data[key]
+        if isinstance(val, dict):
+            return _DictWrapper(val)
+        return val
+    
+    def __repr__(self):
+        return repr(self._data)
+    
+    def keys(self):
+        return self._data.keys()
+    
+    def values(self):
+        return self._data.values()
+    
+    def items(self):
+        return self._data.items()
+
+
 @ActionBase.register('llm')
 class LLMAction(ActionBase):
     """LLM 기반 Action (Tool Calling)"""
+    
+    description = "Use LLM to analyze situation and call tools"
+    schema = {
+        "system_prompt": {
+            "type": "text",
+            "description": "System prompt for the LLM",
+            "default": "You are a helpful assistant."
+        },
+        "user_prompt": {
+            "type": "text",
+            "description": "User prompt/instruction",
+            "default": "Execute the task."
+        }
+    }
     
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -28,19 +79,23 @@ class LLMAction(ActionBase):
             self.client = AsyncAnthropic(api_key=api_key)
         else:
             raise ValueError(f"Unsupported API: {self.api}")
+        
+        # 툴 이름 매핑 초기화
+        self._tool_name_mapping = {}  # {순수이름: 전체이름}
     
     async def execute(
         self, 
         event: Dict[str, Any], 
         state: Dict[str, Any],
-        tools: Dict[str, Callable]
+        tools: Dict[str, Callable],
+        trigger: Dict[str, Any]
     ) -> Dict[str, Any]:
         """LLM에게 판단 맡기고 Tool Calling으로 실행"""
         try:
             # 1. Tool 스펙 준비
             tool_specs = self._prepare_tool_specs(tools)
             
-            # 2. 메시지 처리
+            # 2. 메시지 처리 (템플릿 치환 적용)
             system_content = None
             user_messages = []
             
@@ -48,17 +103,20 @@ class LLMAction(ActionBase):
                 role = msg.get('role', 'user')
                 content = msg.get('content', '')
                 
+                # 템플릿 치환 적용
+                resolved_content = self._resolve_template(content, event, state, trigger)
+                
                 if role == 'system':
-                    system_content = content
+                    system_content = resolved_content
                 elif role == 'user':
                     user_messages.append({
                         'role': 'user',
-                        'content': content
+                        'content': resolved_content
                     })
                 elif role == 'assistant':
                     user_messages.append({
                         'role': 'assistant',
-                        'content': content
+                        'content': resolved_content
                     })
             
             # user 메시지가 없으면 기본 메시지
@@ -70,7 +128,10 @@ class LLMAction(ActionBase):
             
             print(f"\n🤖 Calling LLM...")
             print(f"   Model: {self.model}")
-            print(f"   Tools: {list(tools.keys())}")
+            print(f"   Trigger context: {trigger}")
+            print(f"   Tools available: {len(tools)}")
+            for pure_name, full_name in self._tool_name_mapping.items():
+                print(f"      • {pure_name} (internal: {full_name})")
             
             # system 파라미터 준비
             if system_content:
@@ -110,16 +171,20 @@ class LLMAction(ActionBase):
             
             for block in response.content:
                 if block.type == 'tool_use':
-                    tool_name = block.name
+                    pure_tool_name = block.name  # LLM이 호출한 이름 (예: 'add')
                     tool_args = block.input
                     
-                    print(f"   🔧 LLM calls: {tool_name}({tool_args})")
+                    # 순수 이름 -> 전체 이름으로 변환
+                    full_tool_name = self._tool_name_mapping.get(pure_tool_name, pure_tool_name)
                     
-                    if tool_name in tools:
+                    print(f"   🔧 LLM calls: {pure_tool_name} -> {full_tool_name}({tool_args})")
+                    
+                    # 전체 이름으로 툴 찾기
+                    if full_tool_name in tools:
                         try:
-                            result = await tools[tool_name](**tool_args)
+                            result = await tools[full_tool_name](**tool_args)
                             tool_results.append({
-                                'tool': tool_name,
+                                'tool': full_tool_name,
                                 'args': tool_args,
                                 'result': result
                             })
@@ -127,12 +192,12 @@ class LLMAction(ActionBase):
                         except Exception as e:
                             print(f"      ✗ Error: {e}")
                             tool_results.append({
-                                'tool': tool_name,
+                                'tool': full_tool_name,
                                 'args': tool_args,
                                 'error': str(e)
                             })
                     else:
-                        print(f"      ⚠️ Tool not available")
+                        print(f"      ⚠️ Tool not available: {full_tool_name}")
                 
                 elif block.type == 'text':
                     text_response = block.text
@@ -155,31 +220,77 @@ class LLMAction(ActionBase):
                 'error': str(e)
             }
     
-    def _prepare_tool_specs(self, tools: Dict[str, Callable]) -> list:
-        """Tool을 Anthropic API 형식으로 변환"""
-        specs = []
+    def _resolve_template(
+        self, 
+        template: str, 
+        event: Dict[str, Any], 
+        state: Dict[str, Any],
+        trigger: Dict[str, Any]
+    ) -> str:
+        """
+        템플릿 문자열 치환 - Python 표현식 지원
+        예: "{{trigger.cron}}", "{{trigger.fired_at}}", "{{', '.join(event.keys())}}"
+        """
+        if not template:
+            return template
+            
+        pattern = r'\{\{(.+?)\}\}'
         
-        for tool_name, tool_func in tools.items():
+        def evaluate_expr(expr: str) -> Any:
+            ctx = {
+                'trigger': _DictWrapper(trigger) if trigger else {},
+                'event': _DictWrapper(event) if event else {},
+                'state': _DictWrapper(state) if state else {}
+            }
+            
+            try:
+                return eval(expr, {"__builtins__": {}}, ctx)
+            except Exception as e:
+                print(f"   ⚠️ Template eval failed for '{expr}': {e}")
+                return f"{{{{{expr}}}}}"  # 실패시 원본 유지
+        
+        def replacer(match):
+            expr = match.group(1).strip()
+            return str(evaluate_expr(expr))
+        
+        return re.sub(pattern, replacer, template)
+    
+    def _prepare_tool_specs(self, tools: Dict[str, Callable]) -> list:
+        """
+        Tool을 Anthropic API 형식으로 변환
+        
+        'calculator.add' -> 'add'로 변환하여 LLM에 전달
+        """
+        specs = []
+        self._tool_name_mapping.clear()  # 매핑 초기화
+        
+        for full_tool_name, tool_func in tools.items():
+            # 순수 툴 이름 추출 (마지막 점 이후)
+            pure_tool_name = full_tool_name.split('.')[-1] if '.' in full_tool_name else full_tool_name
+            
+            # 매핑 저장
+            self._tool_name_mapping[pure_tool_name] = full_tool_name
+            
             # 함수에 붙어있는 MCP 스키마 가져오기
             mcp_schema = getattr(tool_func, '_mcp_schema', None)
             
             if mcp_schema:
-                # MCP 스키마가 있으면 그대로 사용
-                description = mcp_schema.get('description', f"Execute {tool_name}")
+                # MCP 스키마가 있으면 그대로 사용 (단, 이름은 순수 이름)
+                description = mcp_schema.get('description', f"Execute {pure_tool_name}")
                 parameters = mcp_schema.get('parameters', {})
                 
                 spec = {
-                    "name": tool_name,
+                    "name": pure_tool_name,
                     "description": description,
                     "input_schema": parameters
                 }
             else:
                 # 스키마가 없으면 기본 스펙
-                doc = getattr(tool_func, '__doc__', f"Execute {tool_name}")
+                doc = getattr(tool_func, '__doc__', f"Execute {pure_tool_name}")
                 
                 spec = {
-                    "name": tool_name,
-                    "description": doc.strip() if doc else f"Execute {tool_name}",
+                    "name": pure_tool_name,
+                    "description": doc.strip() if doc else f"Execute {pure_tool_name}",
                     "input_schema": {
                         "type": "object",
                         "properties": {},

@@ -15,6 +15,7 @@ class Lifecycle:
     type: str  # "temporary" | "persistent"
     ttl_sec: Optional[int] = None  # temporary용 (초)
     max_runs: Optional[int] = None  # 최대 실행 횟수 (None=무제한)
+    cooldown_sec: Optional[int] = None  # 실행 간 대기 시간 (초)
     created_at: Optional[str] = None  # ISO datetime
     expire_at: Optional[str] = None  # ISO datetime (자동 계산됨)
     
@@ -43,6 +44,7 @@ class Lifecycle:
             'type': self.type,
             'ttl_sec': self.ttl_sec,
             'max_runs': self.max_runs,
+            'cooldown_sec': self.cooldown_sec,
             'created_at': self.created_at,
             'expire_at': self.expire_at
         }

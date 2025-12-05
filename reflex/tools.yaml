@@ -1,0 +1,9 @@
+registries:
+- name: saba
+  type: sse
+  url: http://localhost:8083/sse
+- name: simple
+  type: stdio
+  command: python
+  args:
+  - C:\Users\dukes\Downloads\saba2\project_SABA\reflex\very_simple_mcp.py

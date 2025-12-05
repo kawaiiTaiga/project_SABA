@@ -1,3 +1,3 @@
-from .registry import ToolRegistry
+from .registry import ToolRegistry, ToolManager
 
-__all__ = ['ToolRegistry']
+__all__ = ['ToolRegistry','ToolManager']
