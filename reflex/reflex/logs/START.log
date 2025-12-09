@@ -1,0 +1,3 @@
+[2025-12-09 13:46:30] [INFO] Triggered (context: {'type': 'startup', 'fired_at': '2025-12-09T13:46:30.535964'})
+[2025-12-09 13:46:30] [RESULT] Output: meow 🐾
+[2025-12-09 13:46:30] [INFO] Executed OK. Runs: 1

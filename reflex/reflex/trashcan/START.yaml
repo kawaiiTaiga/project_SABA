@@ -1,0 +1,25 @@
+id: START
+name: Start
+trigger:
+  type: startup
+action:
+  type: meow
+  message: meow 🐾
+tools:
+- simple.greet
+lifecycle:
+  type: temporary
+  ttl_sec: 3600
+enabled: true
+logs:
+- time: '2025-12-09 13:46:30'
+  status: INFO
+  message: 'Triggered (context: {''type'': ''startup'', ''fired_at'': ''2025-12-09T13:46:30.535964''})'
+- time: '2025-12-09 13:46:30'
+  status: RESULT
+  message: 'Output: meow 🐾'
+- time: '2025-12-09 13:46:30'
+  status: INFO
+  message: 'Executed OK. Runs: 1'
+metadata:
+  last_run: '2025-12-09 13:46:30'

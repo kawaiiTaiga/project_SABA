@@ -1,0 +1,73 @@
+2025-12-09 22:24:06,165 - INFO - Starting Reflex Engine...
+2025-12-09 22:24:06,172 - INFO - Loaded 0 reflexes from file.
+2025-12-09 22:26:15,267 - INFO - Starting Reflex Engine...
+2025-12-09 22:26:15,267 - INFO - Loaded 0 reflexes from file.
+2025-12-09 22:26:16,202 - INFO - Engine started with 0 reflexes.
+2025-12-09 22:52:02,994 - INFO - Loaded 0 reflexes from file.
+2025-12-09 22:52:06,227 - INFO - Starting Reflex Engine...
+2025-12-09 22:52:06,227 - INFO - Loaded 0 reflexes from file.
+2025-12-09 22:52:06,883 - INFO - Engine started with 0 reflexes.
+2025-12-09 22:52:09,389 - INFO - Engine stopped
+2025-12-09 22:52:09,980 - INFO - Loaded 0 reflexes from file.
+2025-12-09 22:52:38,446 - INFO - Loaded 1 reflexes from file.
+2025-12-09 22:52:46,141 - INFO - Hot loaded reflex: Test
+2025-12-09 22:52:46,144 - INFO - Reflex 'Test' triggered
+2025-12-09 22:52:46,146 - WARNING - Reflex 'Test' triggered but no tools available
+2025-12-09 22:53:09,235 - INFO - Engine stopped
+2025-12-09 22:58:22,746 - INFO - Starting Reflex Engine...
+2025-12-09 22:58:23,067 - INFO - Loaded 1 reflexes from file.
+2025-12-09 22:58:23,574 - INFO - Engine started with 1 reflexes.
+2025-12-09 22:58:23,578 - INFO - Reflex 'Test' triggered
+2025-12-09 22:58:28,131 - INFO - Loaded 1 reflexes from file.
+2025-12-09 22:58:51,564 - INFO - Engine stopped
+2025-12-09 23:13:52,665 - INFO - Starting Reflex Engine...
+2025-12-09 23:13:53,009 - INFO - Loaded 1 reflexes from file.
+2025-12-09 23:13:53,505 - INFO - Engine started with 1 reflexes.
+2025-12-09 23:13:53,510 - INFO - Reflex 'Test' triggered
+2025-12-09 23:14:01,415 - INFO - Reflex 'Test' executed successfully
+2025-12-09 23:14:01,430 - INFO - Reflex 'Test' expired and removed
+2025-12-09 23:14:01,433 - INFO - Moved reflex file to trashcan\20251209_231401_test.yaml
+2025-12-09 23:45:56,347 - INFO - Loaded 0 reflexes from file.
+2025-12-09 23:45:57,194 - INFO - Loaded 0 reflexes from file.
+2025-12-09 23:46:02,092 - INFO - Engine stopped
+2025-12-09 23:46:10,190 - INFO - Starting Reflex Engine...
+2025-12-09 23:46:10,191 - INFO - Loaded 0 reflexes from file.
+2025-12-09 23:46:10,774 - INFO - Engine started with 0 reflexes.
+2025-12-09 23:46:24,762 - INFO - Loaded 0 reflexes from file.
+2025-12-09 23:46:33,300 - INFO - Loaded 0 reflexes from file.
+2025-12-09 23:58:29,031 - INFO - Loaded 0 reflexes from file.
+2025-12-09 23:58:41,559 - INFO - Loaded 0 reflexes from file.
+2025-12-09 23:58:41,559 - INFO - Loaded 0 reflexes from file.
+2025-12-09 23:59:16,089 - INFO - Hot loaded reflex: Test
+2025-12-09 23:59:16,093 - INFO - Reflex 'Test' triggered
+2025-12-10 00:00:05,281 - INFO - Reflex 'Test' executed successfully
+2025-12-10 00:00:05,289 - INFO - Reflex 'Test' expired and removed
+2025-12-10 00:00:05,291 - INFO - Moved reflex file to trashcan\20251210_000005_test.yaml
+2025-12-10 00:03:25,300 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:04:22,465 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:06:31,913 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:06:51,527 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:07:46,347 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:07:48,154 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:07:48,154 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:08:11,526 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:09:16,461 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:09:27,795 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:10:03,967 - INFO - Loaded 1 reflexes from file.
+2025-12-10 00:10:10,496 - INFO - Hot loaded reflex: Test
+2025-12-10 00:10:10,499 - INFO - Reflex 'Test' triggered
+2025-12-10 00:10:11,657 - INFO - Loaded 1 reflexes from file.
+2025-12-10 00:10:52,594 - INFO - Reflex 'Test' executed successfully
+2025-12-10 00:10:52,610 - INFO - Reflex 'Test' expired and removed
+2025-12-10 00:10:52,616 - INFO - Moved reflex file to trashcan\20251210_001052_test.yaml
+2025-12-10 00:25:30,297 - INFO - Hot loaded reflex: wakeword_chat
+2025-12-10 00:28:21,501 - INFO - Hot removed reflex: wakeword_demo
+2025-12-10 00:54:02,343 - INFO - Starting Reflex Engine...
+2025-12-10 00:54:02,346 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:54:03,089 - INFO - Engine started with 0 reflexes.
+2025-12-10 00:54:32,398 - INFO - Engine stopped
+2025-12-10 00:54:35,538 - INFO - Starting Reflex Engine...
+2025-12-10 00:54:35,538 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:54:36,047 - INFO - Engine started with 0 reflexes.
+2025-12-10 00:54:41,952 - INFO - Loaded 0 reflexes from file.
+2025-12-10 00:54:45,339 - INFO - Loaded 0 reflexes from file.

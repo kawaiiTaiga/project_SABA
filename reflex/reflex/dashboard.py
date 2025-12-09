@@ -180,7 +180,7 @@ def create_reflex():
     """Interactive reflex creation"""
     console.print("\n[bold green]== CREATE NEW REFLEX ==[/bold green]\n")
     
-    name = questionary.text("Reflex Name:").ask()
+    name = questionary.text("Reflex Name (Enter to cancel):").ask()
     if not name:
         return
     
@@ -201,23 +201,23 @@ def create_reflex():
             questionary.Choice(f"{t['server']}.{t['name']} - {t['desc'][:40]}", f"{t['server']}.{t['name']}") 
             for t in available_tools
         ]
-        selected_tool = questionary.select(
-            "Select ONE tool for this reflex:",
+        selected_tools = questionary.checkbox(
+            "Select tools (Space to select, Enter to confirm):",
             choices=tool_choices
         ).ask()
-        if selected_tool:
-            tools = [selected_tool]
+        if selected_tools:
+            tools = selected_tools
     else:
-        console.print("[yellow]No tools available from servers. Enter manually:[/yellow]")
-        tool_str = questionary.text("Tool name (server.tool_name):").ask()
+        console.print("[yellow]No tools available from servers. Enter manually (comma separated):[/yellow]")
+        tool_str = questionary.text("Tool names (server.tool_name):").ask()
         if tool_str and tool_str.strip():
-            tools = [tool_str.strip()]
+            tools = [t.strip() for t in tool_str.split(',') if t.strip()]
     
+    # 0개 선택 허용 (LLMAction 등을 위해)
     if not tools:
-        console.print("[red]A tool is required. Aborting.[/red]")
-        return
-    
-    console.print(f"[green]Selected tool: {tools[0]}[/green]\n")
+        console.print("[dim]No tools selected. Proceeding without tools.[/dim]\n")
+    else:
+        console.print(f"[green]Selected tools: {', '.join(tools)}[/green]\n")
     
     # ==========================================
     # Step 2: Trigger
@@ -234,6 +234,12 @@ def create_reflex():
     for param, cfg in getattr(trigger_cls, 'schema', {}).items():
         val = questionary.text(f"{cfg.get('description', param)}:", default=str(cfg.get('default', ''))).ask()
         trigger_config[param] = val
+        
+    # Cooldown (Trigger 속성으로 이동)
+    cooldown_str = questionary.text("Cooldown (seconds, 0 = none):", default="0").ask()
+    cooldown = int(cooldown_str) if cooldown_str else 0
+    if cooldown > 0:
+        trigger_config["cooldown_sec"] = cooldown
     
     # ==========================================
     # Step 3: Action
@@ -249,8 +255,13 @@ def create_reflex():
     action_cls = ActionBase._registry[action_type]
     
     # ToolAction은 별도 인자가 필요 없음 (tool은 이미 선택됨)
+    # ToolAction은 별도 인자가 필요 없음 (tool은 이미 선택됨)
     if action_type == 'tool':
-        console.print(f"[dim]ToolAction will use the selected tool: {tools[0]}[/dim]")
+        if not tools:
+             console.print("[yellow]WARNING: 'tool' action selected but no tools are configured! This reflex will fail to run.[/yellow]")
+        else:
+             console.print(f"[dim]ToolAction will use the selected tools: {tools}[/dim]")
+        
         # arguments만 입력받기
         args_str = questionary.text(
             "Tool arguments (JSON format, e.g. {\"key\": \"value\"}):",
@@ -275,31 +286,23 @@ def create_reflex():
     
     # Lifecycle
     console.print("\n[bold green]== LIFECYCLE SETTINGS ==[/bold green]")
-    lifecycle_type = questionary.select(
-        "Lifecycle type:",
+    lifecycle_choice = questionary.select(
+        "Lifecycle Policy:",
         choices=[
-            questionary.Choice("persistent - Runs forever", "persistent"),
-            questionary.Choice("temporary - Expires after TTL", "temporary"),
+            questionary.Choice("Persistent (Run forever)", "persistent"),
+            questionary.Choice("Temporary (Expire after time)", "temporary"),
+            questionary.Choice("Max Runs (Expire after count)", "max_runs"),
         ]
     ).ask()
     
-    lifecycle_config = {"type": lifecycle_type}
+    lifecycle_config = {"type": lifecycle_choice}
     
-    if lifecycle_type == "temporary":
+    if lifecycle_choice == "temporary":
         ttl = questionary.text("TTL (seconds):", default="3600").ask()
         lifecycle_config["ttl_sec"] = int(ttl)
-    
-    # Max runs
-    max_runs_str = questionary.text("Max runs (0 = unlimited):", default="0").ask()
-    max_runs = int(max_runs_str) if max_runs_str else 0
-    if max_runs > 0:
-        lifecycle_config["max_runs"] = max_runs
-    
-    # Cooldown
-    cooldown_str = questionary.text("Cooldown between runs (seconds, 0 = none):", default="0").ask()
-    cooldown = int(cooldown_str) if cooldown_str else 0
-    if cooldown > 0:
-        lifecycle_config["cooldown_sec"] = cooldown
+    elif lifecycle_choice == "max_runs":
+        runs = questionary.text("Max runs:", default="1").ask()
+        lifecycle_config["max_runs"] = int(runs)
     
     # Enabled by default
     enabled = questionary.confirm("Enable immediately?", default=True).ask()
@@ -329,9 +332,9 @@ def edit_reflex(engine: ReflexEngine):
         console.print("[yellow]No reflexes to edit[/yellow]")
         return
     
-    choices = list(engine.reflexes.keys())
+    choices = ["Back"] + list(engine.reflexes.keys())
     reflex_id = questionary.select("Select reflex to edit:", choices=choices).ask()
-    if not reflex_id:
+    if not reflex_id or reflex_id == "Back":
         return
     
     path = os.path.join(REFLEX_DIR, f"{reflex_id}.yaml")
@@ -420,9 +423,9 @@ def delete_reflex(engine: ReflexEngine):
         console.print("[yellow]No reflexes to delete[/yellow]")
         return
     
-    choices = list(engine.reflexes.keys())
+    choices = ["Back"] + list(engine.reflexes.keys())
     reflex_id = questionary.select("Select reflex to delete:", choices=choices).ask()
-    if not reflex_id:
+    if not reflex_id or reflex_id == "Back":
         return
     
     if questionary.confirm(f"Delete '{reflex_id}'?").ask():
@@ -444,28 +447,77 @@ def delete_reflex(engine: ReflexEngine):
 
 
 
+LOG_DIR = "logs"
+
+
 def view_reflex_logs(engine: ReflexEngine):
     """View logs for a specific reflex"""
     if not engine.reflexes:
         console.print("[yellow]No reflexes available[/yellow]")
         return
     
-    choices = list(engine.reflexes.keys())
+    choices = ["Back"] + list(engine.reflexes.keys())
     reflex_id = questionary.select("Select reflex to view logs:", choices=choices).ask()
-    if not reflex_id:
+    if not reflex_id or reflex_id == "Back":
         return
     
-    # Load reflex YAML to get logs
+    # Read logs from .log file
+    log_path = os.path.join(LOG_DIR, f"{reflex_id}.log")
+    logs = []
+    
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # Parse log line: [2024-12-09 22:30:00] [INFO] message
+                    line = line.strip()
+                    if not line: continue
+                    
+                    try:
+                        # Simple parsing
+                        parts = line.split('] [', 2)
+                        if len(parts) >= 2:
+                            time_str = parts[0].strip('[')
+                            # Check if 3rd part exists (message)
+                            if len(parts) > 2:
+                                # status is parts[1], message is parts[2]
+                                status_str = parts[1]
+                                msg_str = parts[2]
+                            else:
+                                # Maybe format is [time] [status] message
+                                # Split the rest
+                                remainder = parts[1]
+                                if '] ' in remainder:
+                                    status_str, msg_str = remainder.split('] ', 1)
+                                else:
+                                    status_str = remainder.strip(']')
+                                    msg_str = ""
+                                    
+                            logs.append({'time': time_str, 'status': status_str, 'message': msg_str})
+                        else:
+                            logs.append({'time': '', 'status': 'RAW', 'message': line})
+                    except:
+                         logs.append({'time': '', 'status': 'RAW', 'message': line})
+        except Exception as e:
+            console.print(f"[red]Error reading logs: {e}[/red]")
+
+    # Load reflex YAML for metadata
     path = os.path.join(REFLEX_DIR, f"{reflex_id}.yaml")
-    if not os.path.exists(path):
-        console.print(f"[red]File not found: {path}[/red]")
-        return
+    metadata = {}
+    lifecycle = {}
     
-    with open(path, 'r', encoding='utf-8') as f:
-        data = yaml.safe_load(f)
-    
-    logs = data.get('logs', [])
-    metadata = data.get('metadata', {})
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+            metadata = data.get('metadata', {})
+            lifecycle = data.get('lifecycle', {})
+            
+    # Fallback to engine data if file load failed or empty
+    if not metadata:
+        reflex = engine.reflexes.get(reflex_id)
+        if reflex:
+             metadata = reflex.metadata
+             lifecycle = reflex.lifecycle.__dict__ if hasattr(reflex.lifecycle, '__dict__') else {}
     
     console.print(f"\n[bold green]== LOGS: {reflex_id} ==[/bold green]\n")
     
@@ -474,13 +526,15 @@ def view_reflex_logs(engine: ReflexEngine):
     table.add_column("Key", style="cyan")
     table.add_column("Value", style="white")
     table.add_row("Runs", str(metadata.get('runs', 0)))
-    table.add_row("Last Run", metadata.get('last_run', 'Never'))
-    table.add_row("Created", data.get('lifecycle', {}).get('created_at', 'Unknown'))
+    table.add_row("Last Run", str(metadata.get('last_run', 'Never')))
+    created_at = lifecycle.get('created_at', 'Unknown')
+    # Handle if created_at is not in dict but object
+    table.add_row("Created", str(created_at))
     console.print(table)
     
     # Show logs
     if logs:
-        console.print(f"\n[bold]Recent Logs ({len(logs)} entries):[/bold]")
+        console.print(f"\n[bold]Recent Logs (Last 20 of {len(logs)}):[/bold]")
         log_table = Table(box=box.SIMPLE)
         log_table.add_column("Time", style="dim")
         log_table.add_column("Status", style="cyan")
@@ -495,14 +549,16 @@ def view_reflex_logs(engine: ReflexEngine):
         
         console.print(log_table)
     else:
-        console.print("\n[dim]No logs yet. Run the engine to generate logs.[/dim]")
+        console.print("\n[dim]No logs found.[/dim]")
     
     # Option to clear logs
     if logs and questionary.confirm("Clear logs?", default=False).ask():
-        data['logs'] = []
-        with open(path, 'w', encoding='utf-8') as f:
-            yaml.dump(data, f, sort_keys=False, allow_unicode=True)
-        console.print("[yellow]Logs cleared[/yellow]")
+        try:
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write("") # Truncate
+            console.print("[yellow]Logs cleared[/yellow]")
+        except Exception as e:
+            console.print(f"[red]Failed to clear logs: {e}[/red]")
 
 
 # =============================================================================
@@ -712,8 +768,239 @@ def manage_tools():
 
 
 # =============================================================================
+# VIRTUAL TOOL MANAGEMENT (Combine Tools)
+# =============================================================================
+
+def create_virtual_tool_ui():
+    """Create a new virtual tool (Combine Tools)"""
+    console.print("\n[bold green]== COMBINE TOOLS (Virtual Tool) ==[/bold green]\n")
+    
+    name = questionary.text("Virtual Tool Name:").ask()
+    if not name:
+        return
+
+    description = questionary.text("Description:").ask()
+    
+    mode = questionary.select(
+        "Execution Mode:",
+        choices=[
+            questionary.Choice("Sequential (One by one)", "sequential"),
+            questionary.Choice("Parallel (At the same time)", "parallel")
+        ]
+    ).ask()
+    
+    # Select tools to combine
+    console.print("\n[cyan]Fetching available tools...[/cyan]")
+    available_tools = asyncio.run(_fetch_all_tools())
+    
+    if not available_tools:
+        console.print("[yellow]No tools available to combine. Add tool servers first.[/yellow]")
+        return
+
+    tool_choices = [
+        questionary.Choice(f"{t['server']}.{t['name']} - {t['desc'][:40]}", f"{t['server']}.{t['name']}") 
+        for t in available_tools
+    ]
+    
+    selected_tools = questionary.checkbox(
+        "Select tools to combine (Space to select, Enter to confirm):",
+        choices=tool_choices
+    ).ask()
+    
+    if not selected_tools:
+        console.print("[dim]No tools selected. Cancelled.[/dim]")
+        return
+    
+    # Save to config
+    new_virtual_tool = {
+        "name": name,
+        "description": description,
+        "mode": mode,
+        "tools": selected_tools
+    }
+    
+    registries = ConfigManager.load_tools_config()
+    virtual_tools = ConfigManager.load_virtual_tools_config()
+    
+    # Check for duplicates
+    if any(vt['name'] == name for vt in virtual_tools):
+        console.print(f"[red]Virtual tool '{name}' already exists![/red]")
+        return
+        
+    virtual_tools.append(new_virtual_tool)
+    ConfigManager.save_tools_config(registries, virtual_tools)
+    
+    console.print(f"\n[green]Created Virtual Tool: {name}[/green]")
+    console.print(f"   Mode: {mode}")
+    console.print(f"   Tools: {len(selected_tools)}")
+
+
+def delete_virtual_tool_ui():
+    """Delete a virtual tool"""
+    virtual_tools = ConfigManager.load_virtual_tools_config()
+    if not virtual_tools:
+        console.print("[yellow]No virtual tools to delete[/yellow]")
+        return
+    
+    choices = [vt['name'] for vt in virtual_tools] + ["Back"]
+    name = questionary.select("Select virtual tool to delete:", choices=choices).ask()
+    
+    if not name or name == "Back":
+        return
+    
+    if questionary.confirm(f"Delete '{name}'?").ask():
+        new_virtual_tools = [vt for vt in virtual_tools if vt['name'] != name]
+        registries = ConfigManager.load_tools_config()
+        ConfigManager.save_tools_config(registries, new_virtual_tools)
+        console.print(f"[yellow]Deleted: {name}[/yellow]")
+
+
+def list_virtual_tools_ui():
+    """List virtual tools"""
+    virtual_tools = ConfigManager.load_virtual_tools_config()
+    if not virtual_tools:
+        console.print("[dim]No virtual tools configured[/dim]")
+        return
+
+    table = Table(title="[bold cyan]Virtual Tools[/bold cyan]", box=box.SIMPLE)
+    table.add_column("Name", style="green")
+    table.add_column("Mode", style="yellow")
+    table.add_column("Tools", style="white")
+    table.add_column("Description", style="dim")
+    
+    for vt in virtual_tools:
+        tools_str = ", ".join(vt.get('tools', []))
+        if len(tools_str) > 50:
+            tools_str = tools_str[:47] + "..."
+            
+        table.add_row(
+            vt.get('name', 'Unknown'),
+            vt.get('mode', 'sequential'),
+            tools_str,
+            vt.get('description', '')
+        )
+    
+    console.print(table)
+
+
+def manage_virtual_tools():
+    """Virtual Tool Management Menu"""
+    while True:
+        clear_screen()
+        print_header()
+        list_virtual_tools_ui()
+        console.print()
+        
+        choices = [
+            "Create Combined Tool",
+            "Delete Combined Tool",
+            "Back"
+        ]
+        
+        action = questionary.select("Action:", choices=choices).ask()
+        
+        if action == "Back" or action is None:
+            break
+        elif action == "Create Combined Tool":
+            create_virtual_tool_ui()
+            questionary.press_any_key_to_continue().ask()
+        elif action == "Delete Combined Tool":
+            delete_virtual_tool_ui()
+            questionary.press_any_key_to_continue().ask()
+
+
+# =============================================================================
 # MAIN DASHBOARD
 # =============================================================================
+
+# =============================================================================
+# MAIN DASHBOARD
+# =============================================================================
+
+async def live_monitor():
+    """Connect to Engine IPC and stream logs/interaction"""
+    from reflex.core.ipc import IPCClient
+    
+    client = IPCClient()
+    console.print(f"\n[cyan]Connecting to Engine at {client.host}:{client.port}...[/cyan]")
+    
+    if not await client.connect():
+        console.print("[red]Could not connect to Engine. Is it running?[/red]")
+        return
+
+    console.print("[green]Connected! Streaming logs... (Press Ctrl+C to exit)[/green]\n")
+    
+    import asyncio
+    
+    async def receive_loop():
+        try:
+            while client.connected:
+                data = await client.receive()
+                if not data:
+                    break
+                
+                dtype = data.get('type')
+                
+                if dtype == 'log':
+                    # Format log
+                    time = data.get('time', '')
+                    level = data.get('level', 'INFO')
+                    msg = data.get('message', '')
+                    rid = data.get('reflex_id', '')
+                    
+                    style = "white"
+                    if level == "ERROR": style = "red"
+                    elif level == "WARNING": style = "yellow"
+                    elif level == "RESULT": style = "green"
+                    
+                    console.print(f"[{time}] [{rid}] [{style}]{msg}[/{style}]")
+                    
+                elif dtype == 'chat_output':
+                    # Chat output
+                    content = data.get('content', '')
+                    style = data.get('style', '')
+                    if style:
+                        console.print(f"[{style}]{content}[/{style}]")
+                    else:
+                        console.print(content)
+                        
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            console.print(f"[red]Connection lost: {e}[/red]")
+
+    async def input_loop():
+        # Handle user input for chat
+        # This blocks, so we run it in a thread executor if possible, 
+        # but here we are in async.
+        # Simple blocking input is easiest for CLI, but blocks output.
+        # For a true TUI, we need key listeners. 
+        # For this MVP, we just accept that input prompt might interleave.
+        try:
+            while client.connected:
+                # We only want to ask for input if we know a chat is active?
+                # Or just provide a ">" prompt always?
+                # Let's try a non-blocking approach or just wait for user to type
+                
+                # Using questionary actually handles some async? No.
+                # Let's just use a simple input inside a thread
+                msg = await asyncio.to_thread(input) # No prompt to avoid text messing up logs
+                if msg:
+                     await client.send(msg)
+        except:
+             pass
+
+    # Run loops
+    # Note: input_loop will fight with receive_loop for console cursor.
+    # ideally we use textual or similar, but for now simple streaming.
+    try:
+        await asyncio.gather(receive_loop(), input_loop())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        await client.disconnect()
+        console.print("\n[yellow]Disconnected[/yellow]")
+
 
 def run_dashboard():
     """Main dashboard loop"""
@@ -732,13 +1019,14 @@ def run_dashboard():
         console.print()
         
         choices = [
+            "Live Monitor (Real-time)",
             "New Reflex",
             "Edit Reflex",
             "Delete Reflex",
             "View Logs",
+            "Combine Tools",
             "Trash",
             "Tool Servers",
-            "Start Engine",
             "Quit"
         ]
         
@@ -751,6 +1039,12 @@ def run_dashboard():
         if action == "Quit" or action is None:
             console.print("[green]Goodbye![/green]")
             break
+        elif action == "Live Monitor (Real-time)":
+             try:
+                 asyncio.run(live_monitor())
+             except KeyboardInterrupt:
+                 pass
+             questionary.press_any_key_to_continue().ask()
         elif action == "New Reflex":
             create_reflex()
             questionary.press_any_key_to_continue().ask()
@@ -762,18 +1056,12 @@ def run_dashboard():
         elif action == "View Logs":
             view_reflex_logs(engine)
             questionary.press_any_key_to_continue().ask()
+        elif action == "Combine Tools":
+            manage_virtual_tools()
         elif action == "Trash":
             manage_trash()
         elif action == "Tool Servers":
             manage_tools()
-        elif action == "Start Engine":
-            console.print("\n[bold green]Starting engine...[/bold green]")
-            console.print("[dim]Press Ctrl+C to stop[/dim]\n")
-            try:
-                asyncio.run(engine.start())
-            except KeyboardInterrupt:
-                console.print("\n[yellow]Engine stopped[/yellow]")
-            questionary.press_any_key_to_continue().ask()
 
 
 if __name__ == "__main__":
