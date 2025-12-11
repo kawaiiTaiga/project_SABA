@@ -1,0 +1,27 @@
+{
+  "connections": [
+    {
+      "id": "dev-A/impact_live→dev-A/var_a",
+      "source": "dev-A/impact_live",
+      "target": "dev-A/var_a",
+      "transform": {
+        "scale": 2.0
+      },
+      "enabled": true,
+      "description": "",
+      "created_at": "2025-11-25T14:32:06Z"
+    },
+    {
+      "id": "dev-A/impact_live→dev-B/motor",
+      "source": "dev-A/impact_live",
+      "target": "dev-B/motor",
+      "transform": {
+        "threshold": 10.0
+      },
+      "enabled": true,
+      "description": "",
+      "created_at": "2025-11-25T14:32:06Z"
+    }
+  ],
+  "updated_at": "2025-11-25T14:32:06Z"
+}

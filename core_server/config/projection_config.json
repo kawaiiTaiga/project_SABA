@@ -1,0 +1,50 @@
+{
+  "devices": {
+    "dev-8D9E74": {
+      "enabled": true,
+      "device_alias": null,
+      "tools": {
+        "ExpressEmotion": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        },
+        "PlayLEDPattern": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        },
+        "StopLEDPattern": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        }
+      }
+    },
+    "dev-8AEFDC": {
+      "enabled": true,
+      "device_alias": null,
+      "tools": {
+        "ExpressEmotion": {
+          "enabled": false,
+          "alias": null,
+          "description": null
+        },
+        "PlayLEDPattern": {
+          "enabled": false,
+          "alias": null,
+          "description": null
+        },
+        "StopLEDPattern": {
+          "enabled": false,
+          "alias": null,
+          "description": null
+        }
+      }
+    }
+  },
+  "global": {
+    "auto_enable_new_devices": true,
+    "auto_enable_new_tools": true
+  }
+}

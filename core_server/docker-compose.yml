@@ -18,28 +18,33 @@ services:
       MQTT_HOST: mcp-broker
       MQTT_PORT: "1883"
       API_PORT: "8083"
-      PROJECTION_CONFIG_PATH: /app/config/projection_config.json 
+      PROJECTION_CONFIG_PATH: /app/config/projection_config.json
+      ROUTING_CONFIG_PATH: /app/config/routing_config.json
+      CMD_TIMEOUT_MS: "30000"
     ports:
-      - "8083:8083"  # MCP SSE 전용
+      - "8083:8083"
     depends_on:
       - mosquitto
     volumes:
       - ./config:/app/config
 
-  projection-manager:
+
+  manager:
     build:
       context: .
-      dockerfile: Dockerfile.projection-manager
-    container_name: mcp-projection-manager
+      dockerfile: Dockerfile.manager
+    container_name: mcp-manager
     restart: unless-stopped
     environment:
+      API_PORT: "8084"
       PROJECTION_CONFIG_PATH: /app/config/projection_config.json
+      ROUTING_CONFIG_PATH: /app/config/routing_config.json
       BRIDGE_API_URL: http://bridge:8083
       DOCKER_HOST: unix:///var/run/docker.sock
     ports:
-      - "8084:8084"  # 웹 관리 인터페이스 전용
+      - "8084:8084"
     depends_on:
       - bridge
     volumes:
       - ./config:/app/config
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker API 접근용
+      - /var/run/docker.sock:/var/run/docker.sock

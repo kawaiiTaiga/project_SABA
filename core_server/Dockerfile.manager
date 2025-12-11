@@ -1,0 +1,33 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 시스템 패키지 업데이트
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 패키지 설치
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    requests \
+    docker
+
+# 애플리케이션 파일 복사
+COPY mcp_manager /app/mcp_manager
+COPY run_manager.py /app/run_manager.py
+
+# config 디렉토리 생성 (볼륨 마운트 지점)
+RUN mkdir -p /app/config
+
+EXPOSE 8084
+
+# 환경 변수 기본값
+ENV API_PORT=8084 \
+    PROJECTION_CONFIG_PATH=/app/config/projection_config.json \
+    ROUTING_CONFIG_PATH=/app/config/routing_config.json \
+    BRIDGE_API_URL=http://bridge:8083 \
+    AUTO_PORT_FALLBACK=0
+
+CMD ["python", "-u", "run_manager.py"]

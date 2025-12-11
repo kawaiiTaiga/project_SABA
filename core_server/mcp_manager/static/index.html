@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Saba MCP Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Project Saba // MCP Manager</h1>
+            <div class="subtitle">IoT Device Tool Projection & Port Routing Control</div>
+            <div class="status-bar">
+                <span id="bridge-status" class="status-badge status-offline">Bridge: Checking...</span>
+                <span id="docker-status" class="status-badge status-offline">Docker: Checking...</span>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('tools')">Tool Projection</button>
+            <button class="tab" onclick="switchTab('matrix')">Routing Matrix</button>
+            <button class="tab" onclick="switchTab('connections')">Connections</button>
+        </div>
+
+        <div id="alert" class="alert"></div>
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div>Loading...</div>
+        </div>
+
+        <!-- Tool Projection Tab -->
+        <div id="tab-tools" class="tab-content active">
+            <div class="section">
+                <div class="section-header">
+                    <span>Device List & Projection Settings</span>
+                    <button class="btn btn-primary btn-sm" onclick="loadToolsData()">[REFRESH]</button>
+                </div>
+                <div class="section-content">
+                    <div id="devices-container">Loading devices...</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-header">Global Settings</div>
+                <div class="section-content">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <label><input type="checkbox" id="auto-enable-devices"> Auto-enable new devices</label>
+                        <label><input type="checkbox" id="auto-enable-tools"> Auto-enable new tools</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button class="btn btn-success" onclick="saveProjectionConfig()">[SAVE SETTINGS]</button>
+                <button class="btn btn-warning" onclick="restartBridge()">[RESTART BRIDGE]</button>
+            </div>
+        </div>
+
+        <!-- Routing Matrix Tab -->
+        <div id="tab-matrix" class="tab-content">
+            <div class="section">
+                <div class="section-header">
+                    <span>Port Routing Matrix</span>
+                    <button class="btn btn-primary btn-sm" onclick="loadMatrixData()">[REFRESH]</button>
+                </div>
+                <div class="section-content">
+                    <div class="stats-grid" id="matrix-stats">
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-outports">0</div>
+                            <div class="stat-label">OutPorts</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-inports">0</div>
+                            <div class="stat-label">InPorts</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-connections">0</div>
+                            <div class="stat-label">Connections</div>
+                        </div>
+                    </div>
+                    <div class="matrix-container" style="margin-top: 20px;">
+                        <table class="matrix-table" id="routing-matrix">
+                            <thead>
+                                <tr>
+                                    <th>OutPort \\ InPort</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <p style="margin-top: 15px; color: #666; font-size: 0.9em;">
+                        * Click on a cell to connect/disconnect ports. Dark = connected.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connections Tab -->
+        <div id="tab-connections" class="tab-content">
+            <div class="section">
+                <div class="section-header">
+                    <span>Active Connections</span>
+                    <div>
+                        <button class="btn btn-success btn-sm" onclick="showAddConnectionModal()">[ADD
+                            CONNECTION]</button>
+                        <button class="btn btn-primary btn-sm" onclick="loadConnectionsData()">[REFRESH]</button>
+                    </div>
+                </div>
+                <div class="section-content">
+                    <div id="connections-list">Loading connections...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Connection Modal -->
+    <div id="connection-modal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeModal()">&times;</span>
+            <div class="modal-header" id="modal-title">Add Connection</div>
+
+            <div class="form-group">
+                <label>Source (OutPort)</label>
+                <select id="modal-source"></select>
+            </div>
+
+            <div class="form-group">
+                <label>Target (InPort)</label>
+                <select id="modal-target"></select>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Scale (multiply)</label>
+                    <input type="number" id="modal-scale" step="0.1" placeholder="e.g., 2.0">
+                </div>
+                <div class="form-group">
+                    <label>Offset (add)</label>
+                    <input type="number" id="modal-offset" step="0.1" placeholder="e.g., 10">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Threshold</label>
+                    <input type="number" id="modal-threshold" step="0.1" placeholder="e.g., 5.0">
+                </div>
+                <div class="form-group">
+                    <label>Enabled</label>
+                    <select id="modal-enabled">
+                        <option value="true">Yes</option>
+                        <option value="false">No</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" id="modal-description" placeholder="Optional description">
+            </div>
+
+            <input type="hidden" id="modal-connection-id">
+
+            <div class="actions">
+                <button class="btn btn-success" onclick="saveConnection()">[SAVE]</button>
+                <button class="btn btn-danger" id="modal-delete-btn" style="display:none;"
+                    onclick="deleteConnection()">[DELETE]</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

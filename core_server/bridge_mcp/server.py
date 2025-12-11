@@ -1,0 +1,409 @@
+import json
+from typing import List, Union, Any
+from mcp.server.fastmcp import FastMCP
+from mcp.types import ImageContent, TextContent, Resource
+
+from .utils import log, convert_response_to_content_list, json_schema_to_pydantic_model
+from .device_store import DeviceStore
+from .tool_projection import ToolProjectionStore
+from .tool_registry import DynamicToolRegistry
+from .command import CommandWaiter, publish_cmd
+from .mqtt import get_mqtt_pub_client, publish_to_inport
+from port_routing import PortStore, RoutingMatrix
+
+class BridgeServer:
+    def __init__(self, 
+                 device_store: DeviceStore, 
+                 projection_store: ToolProjectionStore, 
+                 tool_registry: DynamicToolRegistry,
+                 cmd_waiter: CommandWaiter,
+                 port_store: PortStore,
+                 routing_matrix: RoutingMatrix,
+                 port_router):
+        self.mcp = FastMCP("bridge-mcp")
+        self.device_store = device_store
+        self.projection_store = projection_store
+        self.tool_registry = tool_registry
+        self.cmd_waiter = cmd_waiter
+        self.port_store = port_store
+        self.routing_matrix = routing_matrix
+        self.port_router = port_router
+        
+        self.setup_resources()
+        self.setup_tools()
+        
+        # Register callback for new devices
+        self.device_store.register_on_announce_callback(self.register_dynamic_tools_for_device)
+
+    def setup_resources(self):
+        @self.mcp.resource("bridge://devices")
+        def res_devices() -> Resource:
+            return Resource(
+                uri="bridge://devices",
+                name="devices",
+                description="Known devices with latest announce/status (raw data)",
+                mimeType="application/json",
+                text=json.dumps(self.device_store.list(), indent=2)
+            )
+
+        @self.mcp.resource("bridge://device/{device_id}")
+        def res_device(device_id: str) -> Resource:
+            d = self.device_store.get(device_id)
+            if not d:
+                return Resource(
+                    uri=f"bridge://device/{device_id}",
+                    name="device",
+                    description="Device not found",
+                    mimeType="application/json",
+                    text=json.dumps({"error":"not found"})
+                )
+            return Resource(
+                uri=f"bridge://device/{device_id}",
+                name="device",
+                description=f"Device {device_id} details (raw data)",
+                mimeType="application/json",
+                text=json.dumps(d, indent=2)
+            )
+
+        @self.mcp.resource("bridge://projections")
+        def res_projections() -> Resource:
+            projected_tools = self.tool_registry.list_all_tools()
+            projection_summary = {
+                "config": self.projection_store.config,
+                "projected_tools": projected_tools,
+                "stats": {
+                    "total_projected_tools": len(projected_tools),
+                    "devices_in_config": len(self.projection_store.config.get("devices", {}))
+                }
+            }
+            return Resource(
+                uri="bridge://projections",
+                name="projections",
+                description="Current projection configuration and projected tools",
+                mimeType="application/json",
+                text=json.dumps(projection_summary, indent=2)
+            )
+
+        @self.mcp.resource("bridge://ports")
+        def res_ports() -> Resource:
+            """모든 디바이스의 포트 정보"""
+            return Resource(
+                uri="bridge://ports",
+                name="ports",
+                description="All device ports (outports and inports)",
+                mimeType="application/json",
+                text=json.dumps({
+                    "devices": self.port_store.list_devices(),
+                    "outports": self.port_store.get_all_outports(),
+                    "inports": self.port_store.get_all_inports()
+                }, indent=2)
+            )
+
+        @self.mcp.resource("bridge://routing-matrix")
+        def res_routing_matrix() -> Resource:
+            """라우팅 매트릭스 뷰"""
+            matrix_view = self.routing_matrix.get_matrix_view(self.port_store)
+            return Resource(
+                uri="bridge://routing-matrix",
+                name="routing-matrix",
+                description="OutPort to InPort routing matrix",
+                mimeType="application/json",
+                text=json.dumps(matrix_view, indent=2)
+            )
+
+    def setup_tools(self):
+        @self.mcp.tool()
+        def invoke(device_id: str, tool: str, args: dict | None = None) -> List[Union[ImageContent, TextContent]]:
+            """Generic tool invoker (fallback for any device tool) - uses original tool names"""
+            args = args or {}
+            ok, resp = publish_cmd(self.device_store, self.cmd_waiter, get_mqtt_pub_client(), device_id, tool, args)
+            if not ok:
+                error_msg = resp.get("error", {}).get("message", "Unknown error")
+                return [TextContent(type="text", text=f"Error: {error_msg}")]
+            
+            return convert_response_to_content_list(resp)
+
+        @self.mcp.tool()
+        def list_devices() -> List[TextContent]:
+            """List devices from announce/status cache with projection info."""
+            devices = self.device_store.list()
+            device_summary = []
+            for device in devices:
+                device_id = device['device_id']
+                status = "online" if device.get("online", False) else "offline"
+                tools_count = len(device.get("tools", []))
+                
+                device_alias = self.projection_store.get_device_alias(device_id, device.get('name'))
+                is_enabled = self.projection_store.is_device_enabled(device_id)
+                
+                projected_tools = [t for t in self.tool_registry.list_all_tools() if t['device_id'] == device_id]
+                projected_count = len(projected_tools)
+                
+                device_summary.append(
+                    f"• {device_id} → '{device_alias}' ({status}, {projected_count}/{tools_count} tools projected, {'enabled' if is_enabled else 'disabled'})"
+                )
+            
+            summary_text = f"Found {len(devices)} devices:\n" + "\n".join(device_summary)
+            return [TextContent(type="text", text=summary_text)]
+
+        @self.mcp.tool()
+        def get_tools(device_id: str) -> List[TextContent]:
+            """List a device's announced tools with projection status."""
+            d = self.device_store.get(device_id)
+            if not d:
+                return [TextContent(type="text", text=f"Error: device_id '{device_id}' not found")]
+            
+            tools = d.get("tools", [])
+            if not tools:
+                return [TextContent(type="text", text=f"Device {device_id} has no announced tools")]
+            
+            tool_summary = []
+            for tool in tools:
+                name = tool.get("name", "unknown")
+                desc = tool.get("description", "")
+                
+                is_enabled = self.projection_store.is_tool_enabled(device_id, name)
+                if is_enabled:
+                    projected_tool = self.projection_store.get_tool_projection(device_id, name, tool)
+                    projected_name = projected_tool["name"]
+                    projected_desc = projected_tool["description"]
+                    tool_summary.append(f"• {name} → '{projected_name}' (enabled): {projected_desc}")
+                else:
+                    tool_summary.append(f"• {name} (disabled): {desc}")
+            
+            device_alias = self.projection_store.get_device_alias(device_id, d.get('name'))
+            summary_text = f"Device {device_id} → '{device_alias}' tools ({len(tools)} total):\n" + "\n".join(tool_summary)
+            return [TextContent(type="text", text=summary_text)]
+
+        @self.mcp.tool()
+        def list_ports() -> List[TextContent]:
+            """List all device ports (outports and inports) with routing info."""
+            outports = self.port_store.get_all_outports()
+            inports = self.port_store.get_all_inports()
+            connections = self.routing_matrix.get_all_connections()
+            
+            lines = [f"=== Ports Overview ==="]
+            lines.append(f"OutPorts: {len(outports)}, InPorts: {len(inports)}, Connections: {len(connections)}")
+            lines.append("")
+            
+            lines.append("--- OutPorts (Sources) ---")
+            for p in outports:
+                port_id = p['port_id']
+                targets = self.routing_matrix.get_targets_for_source(port_id)
+                target_count = len(targets)
+                lines.append(f"• {port_id} ({p.get('data_type', '?')}) → {target_count} connections")
+            
+            lines.append("")
+            lines.append("--- InPorts (Sinks) ---")
+            for p in inports:
+                lines.append(f"• {p['port_id']} ({p.get('data_type', '?')})")
+            
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        @self.mcp.tool()
+        def connect_ports(
+            source: str, 
+            target: str, 
+            scale: float | None = None,
+            offset: float | None = None,
+            threshold: float | None = None,
+            description: str = ""
+        ) -> List[TextContent]:
+            """
+            Connect an OutPort to an InPort with optional transform.
+            
+            Args:
+                source: Source OutPort ID (format: "device_id/port_name")
+                target: Target InPort ID (format: "device_id/port_name")
+                scale: Multiply value by this factor
+                offset: Add this value after scaling
+                threshold: Convert to 0/1 based on threshold (1 if value > threshold)
+                description: Human-readable description of this connection
+            
+            Example:
+                connect_ports("dev-A/impact", "dev-B/motor", scale=2.0, threshold=10.0)
+            """
+            # Transform 설정 생성
+            transform = {}
+            if scale is not None:
+                transform["scale"] = scale
+            if offset is not None:
+                transform["offset"] = offset
+            if threshold is not None:
+                transform["threshold"] = threshold
+                transform["threshold_mode"] = "above"
+            
+            # 포트 존재 확인
+            outports = self.port_store.get_all_outports()
+            inports = self.port_store.get_all_inports()
+            
+            source_exists = any(p['port_id'] == source for p in outports)
+            target_exists = any(p['port_id'] == target for p in inports)
+            
+            warnings = []
+            if not source_exists:
+                warnings.append(f"Warning: Source '{source}' not found in announced outports")
+            if not target_exists:
+                warnings.append(f"Warning: Target '{target}' not found in announced inports")
+            
+            # 연결 생성
+            conn = self.routing_matrix.connect(source, target, transform, enabled=True, description=description)
+            
+            result_lines = [f"✓ Connected: {source} → {target}"]
+            if transform:
+                result_lines.append(f"  Transform: {json.dumps(transform)}")
+            if description:
+                result_lines.append(f"  Description: {description}")
+            result_lines.extend(warnings)
+            
+            return [TextContent(type="text", text="\n".join(result_lines))]
+
+        @self.mcp.tool()
+        def disconnect_ports(source: str, target: str) -> List[TextContent]:
+            """
+            Disconnect an OutPort from an InPort.
+            
+            Args:
+                source: Source OutPort ID (format: "device_id/port_name")
+                target: Target InPort ID (format: "device_id/port_name")
+            """
+            success = self.routing_matrix.disconnect(source, target)
+            if success:
+                return [TextContent(type="text", text=f"✓ Disconnected: {source} → {target}")]
+            else:
+                return [TextContent(type="text", text=f"✗ Connection not found: {source} → {target}")]
+
+        @self.mcp.tool()
+        def get_routing_matrix() -> List[TextContent]:
+            """Get the full routing matrix showing all OutPort to InPort connections."""
+            matrix_view = self.routing_matrix.get_matrix_view(self.port_store)
+            
+            lines = ["=== Routing Matrix ==="]
+            lines.append(f"Total connections: {matrix_view['connection_count']}")
+            lines.append("")
+            
+            connections = self.routing_matrix.get_all_connections()
+            if not connections:
+                lines.append("No connections configured.")
+            else:
+                for conn in connections:
+                    status = "✓" if conn.get("enabled", True) else "✗"
+                    transform_str = json.dumps(conn.get("transform", {})) if conn.get("transform") else "none"
+                    lines.append(f"{status} {conn['source']} → {conn['target']}")
+                    lines.append(f"    Transform: {transform_str}")
+                    if conn.get("description"):
+                        lines.append(f"    Description: {conn['description']}")
+            
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        @self.mcp.tool()
+        def set_inport_value(device_id: str, port_name: str, value: float) -> List[TextContent]:
+            """
+            Directly set an InPort value on a device.
+            
+            Args:
+                device_id: Target device ID
+                port_name: InPort name
+                value: Value to set
+            """
+            success = publish_to_inport(device_id, port_name, value)
+            
+            if success:
+                return [TextContent(type="text", text=f"✓ Set {device_id}/{port_name} = {value}")]
+            else:
+                return [TextContent(type="text", text=f"✗ Failed to set {device_id}/{port_name}")]
+
+        @self.mcp.tool()
+        def get_routing_stats() -> List[TextContent]:
+            """Get routing statistics."""
+            stats = self.port_router.get_stats()
+            
+            lines = ["=== Routing Statistics ==="]
+            lines.append(f"Total routed: {stats.get('total_routed', 0)}")
+            lines.append(f"Total dropped: {stats.get('total_dropped', 0)}")
+            lines.append(f"Last routed at: {stats.get('last_routed_at', 'never')}")
+            
+            return [TextContent(type="text", text="\n".join(lines))]
+
+    def register_dynamic_tools_for_device(self, device_id: str):
+        """Register dynamic projected tools for a specific device with FastMCP using proper schemas"""
+        device = self.device_store.get(device_id)
+        if not device or not device.get("tools"):
+            return
+        
+        log(f"[MCP] Registering dynamic projected tools for device {device_id}")
+        
+        for tool_info in device["tools"]:
+            tool_name = tool_info.get("name", "")
+            if not tool_name:
+                continue
+            
+            if not self.projection_store.is_tool_enabled(device_id, tool_name):
+                log(f"[MCP] Skipping disabled tool: {tool_name} for device {device_id}")
+                continue
+            
+            projected_tool = self.projection_store.get_tool_projection(device_id, tool_name, tool_info)
+            projected_name = projected_tool["name"]
+            
+            tool_key = f"{projected_name}_{device_id}"
+            
+            if self.tool_registry.get_registered_function(tool_key):
+                continue
+            
+            try:
+                schema = tool_info.get("parameters", {})
+                if not schema or schema.get("type") != "object":
+                    log(f"[MCP] Skipping tool {tool_key}: invalid or missing schema")
+                    continue
+                
+                ParamModel = json_schema_to_pydantic_model(f"{tool_key}_params", schema)
+                
+                # Capture variables in closure
+                def create_tool_func(device_id_copy, original_tool_name_copy, projected_tool_copy, param_model):
+                    def tool_func(params: param_model) -> List[Union[ImageContent, TextContent]]:
+                        """Dynamically generated projected device tool function with proper schema"""
+                        args = params.dict()
+                        
+                        # Sanitize args
+                        for k, v in args.items():
+                            if isinstance(v, str) and v.strip().startswith('{'):
+                                try:
+                                    loaded = json.loads(v)
+                                    if isinstance(loaded, dict) and k in loaded:
+                                        args[k] = loaded[k]
+                                        log(f"[MCP] Auto-unwrapped nested JSON for arg '{k}'")
+                                except:
+                                    pass
+
+                        log(f"[PROJECTED_TOOL] {projected_tool_copy['name']} ({original_tool_name_copy}) called with args: {json.dumps(args, indent=2)}")
+                        
+                        ok, resp = publish_cmd(self.device_store, self.cmd_waiter, get_mqtt_pub_client(), device_id_copy, original_tool_name_copy, args)
+                        
+                        if not ok:
+                            error_msg = resp.get("error", {}).get("message", "Unknown error")
+                            return [TextContent(type="text", text=f"Error: {error_msg}")]
+                        
+                        return convert_response_to_content_list(resp)
+                    
+                    tool_func.__name__ = projected_tool_copy["name"]
+                    tool_func.__doc__ = projected_tool_copy["description"]
+                    
+                    return tool_func
+                
+                dynamic_func = create_tool_func(device_id, tool_name, projected_tool, ParamModel)
+                decorated_func = self.mcp.tool()(dynamic_func)
+                self.tool_registry.set_registered_function(tool_key, decorated_func)
+                
+                log(f"[MCP] Successfully registered projected tool: {tool_key}")
+                
+            except Exception as e:
+                log(f"[MCP] Failed to register projected tool {tool_key}: {e}")
+
+    def register_all_announced_devices(self):
+        """Register tools for all devices that were announced before FastMCP initialization"""
+        devices = self.device_store.list()
+        log(f"[MCP] Registering tools for {len(devices)} announced devices")
+        for device in devices:
+            device_id = device.get("device_id")
+            if device_id:
+                self.register_dynamic_tools_for_device(device_id)
