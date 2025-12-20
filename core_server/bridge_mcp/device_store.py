@@ -17,7 +17,7 @@ class DeviceStore:
     def register_on_announce_callback(self, callback):
         self.on_announce_callbacks.append(callback)
 
-    def upsert_announce(self, device_id: str, msg: Dict[str, Any]):
+    def upsert_announce(self, device_id: str, msg: Dict[str, Any], protocol: str = "mqtt"):
         with self._lock:
             d = self._by_id.setdefault(device_id, {"device_id": device_id})
             d["name"] = msg.get("name")
@@ -26,6 +26,7 @@ class DeviceStore:
             d["tools"] = msg.get("tools", [])
             d["last_announce"] = msg
             d["last_seen"] = now_iso()
+            d["protocol"] = protocol
         
         tools = msg.get("tools", [])
         device_name = msg.get("name")

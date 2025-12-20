@@ -1,0 +1,20 @@
+{
+  "virtual_tools": {
+    "voice_start": {
+      "description": "start_voice",
+      "bindings": [
+        {
+          "device_id": "ipc_agent_test",
+          "tool": "ipc_echo"
+        },
+        {
+          "device_id": "saba_audio_master",
+          "tool": "play_audio_Taiga"
+        }
+      ]
+    }
+  },
+  "global": {
+    "default_timeout_ms": 10000
+  }
+}

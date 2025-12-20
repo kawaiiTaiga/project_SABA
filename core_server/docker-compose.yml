@@ -20,9 +20,11 @@ services:
       API_PORT: "8083"
       PROJECTION_CONFIG_PATH: /app/config/projection_config.json
       ROUTING_CONFIG_PATH: /app/config/routing_config.json
+      VIRTUAL_TOOLS_CONFIG_PATH: /app/config/virtual_tools.json
       CMD_TIMEOUT_MS: "30000"
     ports:
       - "8083:8083"
+      - "8085:8085"
     depends_on:
       - mosquitto
     volumes:

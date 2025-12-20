@@ -62,3 +62,10 @@ class DynamicToolRegistry:
     def set_registered_function(self, tool_key: str, func: Any):
         with self._lock:
             self._registered_funcs[tool_key] = func
+
+    def clear_tools(self):
+        """Clear all registered tools"""
+        with self._lock:
+            self._tools.clear()
+            self._registered_funcs.clear()
+            log("[TOOLS] Registry cleared")

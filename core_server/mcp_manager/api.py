@@ -45,6 +45,23 @@ def restart_bridge():
         return {"ok": True}
     return {"ok": False, "error": "Failed to restart container"}
 
+@app.post("/api/bridge/reload")
+def reload_bridge_config():
+    """Proxy to reload bridge config"""
+    try:
+        # Utilize BridgeAPIClient or requests. 
+        # Since BridgeAPIClient doesn't have it yet, let's use requests directly for simplicity
+        # or extend BridgeAPIClient. Let's use requests for now as it's cleaner than editing two files for a simple pass-through.
+        import requests
+        resp = requests.post(f"{BRIDGE_API_URL}/management/reload", timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {"ok": False, "error": f"Bridge returned {resp.status_code}"}
+    except Exception as e:
+        log(f"[API] Error reloading bridge: {e}")
+        return {"ok": False, "error": str(e)}
+
 # ---- Projection Config ----
 @app.get("/api/projection/config")
 def get_projection_config():
@@ -115,3 +132,66 @@ def disconnect_ports(data: dict):
 @app.put("/api/routing/connection/{connection_id}")
 def update_connection(connection_id: str, data: dict):
     return bridge_api.update_connection(connection_id, data)
+
+# ---- Virtual Tools (Proxy to Bridge) ----
+@app.get("/api/virtual-tools")
+def get_virtual_tools():
+    try:
+        import requests
+        resp = requests.get(f"{BRIDGE_API_URL}/virtual-tools", timeout=5)
+        return resp.json()
+    except Exception as e:
+        log(f"[API] Error getting virtual tools: {e}")
+        return {}
+
+@app.get("/api/virtual-tools/{name}")
+def get_virtual_tool(name: str):
+    try:
+        import requests
+        resp = requests.get(f"{BRIDGE_API_URL}/virtual-tools/{name}", timeout=5)
+        if resp.status_code == 404:
+            raise HTTPException(HTTPStatus.NOT_FOUND, "Virtual tool not found")
+        return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        log(f"[API] Error getting virtual tool: {e}")
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
+@app.post("/api/virtual-tools")
+def create_virtual_tool(data: dict):
+    try:
+        import requests
+        resp = requests.post(f"{BRIDGE_API_URL}/virtual-tools", json=data, timeout=10)
+        return resp.json()
+    except Exception as e:
+        log(f"[API] Error creating virtual tool: {e}")
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
+@app.put("/api/virtual-tools/{name}")
+def update_virtual_tool(name: str, data: dict):
+    try:
+        import requests
+        resp = requests.put(f"{BRIDGE_API_URL}/virtual-tools/{name}", json=data, timeout=10)
+        if resp.status_code == 404:
+            raise HTTPException(HTTPStatus.NOT_FOUND, "Virtual tool not found")
+        return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        log(f"[API] Error updating virtual tool: {e}")
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+
+@app.delete("/api/virtual-tools/{name}")
+def delete_virtual_tool(name: str):
+    try:
+        import requests
+        resp = requests.delete(f"{BRIDGE_API_URL}/virtual-tools/{name}", timeout=10)
+        if resp.status_code == 404:
+            raise HTTPException(HTTPStatus.NOT_FOUND, "Virtual tool not found")
+        return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        log(f"[API] Error deleting virtual tool: {e}")
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))

@@ -23,6 +23,7 @@
             <button class="tab active" onclick="switchTab('tools')">Tool Projection</button>
             <button class="tab" onclick="switchTab('matrix')">Routing Matrix</button>
             <button class="tab" onclick="switchTab('connections')">Connections</button>
+            <button class="tab" onclick="switchTab('virtual')">Virtual Tools</button>
         </div>
 
         <div id="alert" class="alert"></div>
@@ -36,7 +37,13 @@
             <div class="section">
                 <div class="section-header">
                     <span>Device List & Projection Settings</span>
-                    <button class="btn btn-primary btn-sm" onclick="loadToolsData()">[REFRESH]</button>
+                    <div style="display: flex; gap: 15px; align-items: center;">
+                        <label style="font-size: 0.8em; cursor: pointer; display: flex; align-items: center;">
+                            <input type="checkbox" id="show-offline-devices" onchange="renderDevices()">
+                            Show Offline Devices
+                        </label>
+                        <button class="btn btn-primary btn-sm" onclick="loadToolsData()">[REFRESH]</button>
+                    </div>
                 </div>
                 <div class="section-content">
                     <div id="devices-container">Loading devices...</div>
@@ -55,6 +62,7 @@
 
             <div class="actions">
                 <button class="btn btn-success" onclick="saveProjectionConfig()">[SAVE SETTINGS]</button>
+                <button class="btn btn-primary" onclick="reloadBridgeConfig()">[RELOAD CONFIG]</button>
                 <button class="btn btn-warning" onclick="restartBridge()">[RESTART BRIDGE]</button>
             </div>
         </div>
@@ -114,6 +122,26 @@
                 </div>
             </div>
         </div>
+
+        <!-- Virtual Tools Tab -->
+        <div id="tab-virtual" class="tab-content">
+            <div class="section">
+                <div class="section-header">
+                    <span>Virtual Tools</span>
+                    <div>
+                        <button class="btn btn-success btn-sm" onclick="showAddVirtualToolModal()">[ADD VIRTUAL
+                            TOOL]</button>
+                        <button class="btn btn-primary btn-sm" onclick="loadVirtualToolsData()">[REFRESH]</button>
+                    </div>
+                </div>
+                <div class="section-content">
+                    <p style="color: #666; font-size: 0.9em; margin-bottom: 15px;">
+                        Virtual Tools execute multiple device tools in parallel with a single call.
+                    </p>
+                    <div id="virtual-tools-list">Loading virtual tools...</div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Connection Modal -->
@@ -168,6 +196,42 @@
                 <button class="btn btn-success" onclick="saveConnection()">[SAVE]</button>
                 <button class="btn btn-danger" id="modal-delete-btn" style="display:none;"
                     onclick="deleteConnection()">[DELETE]</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Virtual Tool Modal -->
+    <div id="virtual-tool-modal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeVirtualToolModal()">&times;</span>
+            <div class="modal-header" id="vt-modal-title">Add Virtual Tool</div>
+
+            <div class="form-group">
+                <label>Name (identifier)</label>
+                <input type="text" id="vt-modal-name" placeholder="e.g., broadcast_emotion"
+                    style="font-family: monospace;">
+            </div>
+
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" id="vt-modal-description" placeholder="What this virtual tool does">
+            </div>
+
+            <div class="form-group">
+                <label>Tool Bindings</label>
+                <p style="font-size: 0.85em; color: #666; margin-bottom: 10px;">Add device tools that will be executed
+                    in parallel.</p>
+                <div id="vt-bindings-list"></div>
+                <button class="btn btn-primary btn-sm" onclick="addVirtualToolBinding()" style="margin-top: 10px;">[+
+                    ADD BINDING]</button>
+            </div>
+
+            <input type="hidden" id="vt-modal-original-name">
+
+            <div class="actions">
+                <button class="btn btn-success" onclick="saveVirtualTool()">[SAVE]</button>
+                <button class="btn btn-danger" id="vt-modal-delete-btn" style="display:none;"
+                    onclick="deleteVirtualTool()">[DELETE]</button>
             </div>
         </div>
     </div>

@@ -5,14 +5,16 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from http import HTTPStatus
 
-from .config import PROJECTION_CONFIG_PATH, ROUTING_CONFIG_PATH, API_PORT, MQTT_HOST, MQTT_PORT, KEEPALIVE
+from .config import PROJECTION_CONFIG_PATH, ROUTING_CONFIG_PATH, VIRTUAL_TOOLS_CONFIG_PATH, API_PORT, MQTT_HOST, MQTT_PORT, KEEPALIVE
 from .utils import log, now_iso
 from .tool_projection import ToolProjectionStore
 from .tool_registry import DynamicToolRegistry
 from .device_store import DeviceStore
 from .command import CommandWaiter
-from .mqtt import start_mqtt_listener, publish_to_inport
+from .mqtt import start_mqtt_listener, publish_to_inport, get_mqtt_pub_client
+from .ipc import IPCAgent
 from .server import BridgeServer
+from .virtual_tool import VirtualToolStore, VirtualToolExecutor
 from port_routing import PortStore, RoutingMatrix, PortRouter
 
 def pick_free_port(base: int, tries: int) -> int | None:
@@ -34,14 +36,38 @@ def main():
     cmd_waiter = CommandWaiter()
     port_store = PortStore()
     routing_matrix = RoutingMatrix(ROUTING_CONFIG_PATH)
+    virtual_tool_store = VirtualToolStore(VIRTUAL_TOOLS_CONFIG_PATH)
     
+    # 3. Initialize IPC Agent (needed for publisher)
+    ipc_agent = IPCAgent(device_store, cmd_waiter, port_store, None) # router passed later
+    
+    # Define Hybrid Publisher
+    def hybrid_publish(device_id: str, port: str, value: float) -> bool:
+        d = device_store.get(device_id)
+        if d and d.get("protocol") == 'ipc':
+            return ipc_agent.send_port_set(device_id, port, value)
+        return publish_to_inport(device_id, port, value)
+
     # 2. Initialize Port Router
-    port_router = PortRouter(routing_matrix, publish_to_inport)
+    port_router = PortRouter(routing_matrix, hybrid_publish)
     
-    # 3. Start MQTT Listener
+    # Update IPC Agent with router
+    ipc_agent.port_router = port_router
+    # CRITICAL: Also update the protocol handler's router (it was created with None!)
+    ipc_agent.protocol.port_router = port_router
+    
+    # 3b. Start IPC Agent (start thread)
+    ipc_agent.start()
+    
+    # 3c. Start MQTT Listener
     start_mqtt_listener(device_store, cmd_waiter, port_store, port_router)
     
-    # 4. Initialize Bridge Server (MCP)
+    # 4. Initialize Virtual Tool Executor
+    virtual_tool_executor = VirtualToolExecutor(
+        virtual_tool_store, device_store, cmd_waiter, get_mqtt_pub_client, ipc_agent
+    )
+    
+    # 5. Initialize Bridge Server (MCP)
     server = BridgeServer(
         device_store, 
         projection_store, 
@@ -49,11 +75,15 @@ def main():
         cmd_waiter, 
         port_store, 
         routing_matrix,
-        port_router
+        port_router,
+        ipc_agent=ipc_agent,
+        virtual_tool_store=virtual_tool_store,
+        virtual_tool_executor=virtual_tool_executor
     )
     
-    # Register existing devices
+    # Register existing devices and virtual tools
     server.register_all_announced_devices()
+    server.register_virtual_tools()
     
     # 5. Initialize FastAPI App
     app = FastAPI(title="Bridge MCP (SSE + Port Routing API)")
@@ -143,6 +173,84 @@ def main():
         if not conn:
             raise HTTPException(HTTPStatus.NOT_FOUND, "connection not found")
         return {"ok": True, "connection": conn}
+
+    @app.post("/management/reload")
+    def reload_config_api():
+        """Reload configuration and refresh tool definitions"""
+        try:
+            # 1. Reload raw config from disk
+            server.projection_store.reload_config()
+            virtual_tool_store.reload_config()
+            
+            # 2. Reset and Re-register tools
+            server.reset_tools()
+            server.register_all_announced_devices()
+            server.register_virtual_tools()
+            
+            # 3. Notify MCP clients (optional, if supported)
+            # server.mcp.send_notification("notifications/tools/list_changed")
+            
+            log("[API] Hot reload triggered via /management/reload")
+            return {"ok": True, "message": "Configuration reloaded and tools refreshed"}
+        except Exception as e:
+            log(f"[API] Hot reload failed: {e}")
+            raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, f"Reload failed: {e}")
+
+    # ========= Virtual Tools API Endpoints =========
+    @app.get("/virtual-tools")
+    def get_virtual_tools_api():
+        """Get all virtual tools"""
+        return virtual_tool_store.get_all_virtual_tools()
+
+    @app.get("/virtual-tools/{name}")
+    def get_virtual_tool_api(name: str):
+        """Get a specific virtual tool"""
+        vt = virtual_tool_store.get_virtual_tool(name)
+        if not vt:
+            raise HTTPException(HTTPStatus.NOT_FOUND, "virtual tool not found")
+        return vt
+
+    @app.post("/virtual-tools")
+    def create_virtual_tool_api(data: dict):
+        """Create a new virtual tool"""
+        name = data.get("name")
+        if not name:
+            raise HTTPException(HTTPStatus.BAD_REQUEST, "name is required")
+        
+        tool_def = {
+            "description": data.get("description", ""),
+            "bindings": data.get("bindings", [])
+        }
+        success = virtual_tool_store.create_virtual_tool(name, tool_def)
+        if success:
+            # Re-register virtual tools after creation
+            server.register_virtual_tools()
+            return {"ok": True, "message": f"Virtual tool '{name}' created"}
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, "Failed to create virtual tool")
+
+    @app.put("/virtual-tools/{name}")
+    def update_virtual_tool_api(name: str, data: dict):
+        """Update a virtual tool"""
+        tool_def = {
+            "description": data.get("description", ""),
+            "bindings": data.get("bindings", [])
+        }
+        success = virtual_tool_store.update_virtual_tool(name, tool_def)
+        if success:
+            server.register_virtual_tools()
+            return {"ok": True, "message": f"Virtual tool '{name}' updated"}
+        raise HTTPException(HTTPStatus.NOT_FOUND, "virtual tool not found")
+
+    @app.delete("/virtual-tools/{name}")
+    def delete_virtual_tool_api(name: str):
+        """Delete a virtual tool"""
+        success = virtual_tool_store.delete_virtual_tool(name)
+        if success:
+            server.reset_tools()
+            server.register_all_announced_devices()
+            server.register_virtual_tools()
+            return {"ok": True, "message": f"Virtual tool '{name}' deleted"}
+        raise HTTPException(HTTPStatus.NOT_FOUND, "virtual tool not found")
 
     @app.get("/routing/stats")
     def get_routing_stats_api():

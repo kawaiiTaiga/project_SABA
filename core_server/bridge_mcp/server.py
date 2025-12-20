@@ -19,7 +19,10 @@ class BridgeServer:
                  cmd_waiter: CommandWaiter,
                  port_store: PortStore,
                  routing_matrix: RoutingMatrix,
-                 port_router):
+                 port_router,
+                 ipc_agent=None,
+                 virtual_tool_store=None,
+                 virtual_tool_executor=None):
         self.mcp = FastMCP("bridge-mcp")
         self.device_store = device_store
         self.projection_store = projection_store
@@ -28,6 +31,10 @@ class BridgeServer:
         self.port_store = port_store
         self.routing_matrix = routing_matrix
         self.port_router = port_router
+        self.ipc_agent = ipc_agent
+        self.virtual_tool_store = virtual_tool_store
+        self.virtual_tool_executor = virtual_tool_executor
+        self._registered_virtual_tools = set()  # Track registered virtual tool names
         
         self.setup_resources()
         self.setup_tools()
@@ -38,10 +45,24 @@ class BridgeServer:
     def setup_resources(self):
         @self.mcp.resource("bridge://devices")
         def res_devices() -> Resource:
+            # Filter offline devices by default for cleaner view
+            all_devices = self.device_store.list()
+            online_devices = [d for d in all_devices if d.get("online", False)]
+            
             return Resource(
                 uri="bridge://devices",
                 name="devices",
-                description="Known devices with latest announce/status (raw data)",
+                description="Known online devices (all: see bridge://devices/all)",
+                mimeType="application/json",
+                text=json.dumps(online_devices, indent=2)
+            )
+
+        @self.mcp.resource("bridge://devices/all")
+        def res_devices_all() -> Resource:
+            return Resource(
+                uri="bridge://devices/all",
+                name="devices-all",
+                description="All known devices (including offline)",
                 mimeType="application/json",
                 text=json.dumps(self.device_store.list(), indent=2)
             )
@@ -116,7 +137,12 @@ class BridgeServer:
         def invoke(device_id: str, tool: str, args: dict | None = None) -> List[Union[ImageContent, TextContent]]:
             """Generic tool invoker (fallback for any device tool) - uses original tool names"""
             args = args or {}
-            ok, resp = publish_cmd(self.device_store, self.cmd_waiter, get_mqtt_pub_client(), device_id, tool, args)
+            
+            d = self.device_store.get(device_id)
+            if d and not d.get("online", False):
+                return [TextContent(type="text", text=f"Error: Device {device_id} is offline")]
+
+            ok, resp = publish_cmd(self.device_store, self.cmd_waiter, get_mqtt_pub_client(), device_id, tool, args, ipc_agent=self.ipc_agent)
             if not ok:
                 error_msg = resp.get("error", {}).get("message", "Unknown error")
                 return [TextContent(type="text", text=f"Error: {error_msg}")]
@@ -124,13 +150,21 @@ class BridgeServer:
             return convert_response_to_content_list(resp)
 
         @self.mcp.tool()
-        def list_devices() -> List[TextContent]:
-            """List devices from announce/status cache with projection info."""
+        def list_devices(show_offline: bool = False) -> List[TextContent]:
+            """List devices. By default, only online devices are shown. Set show_offline=True to see all."""
             devices = self.device_store.list()
             device_summary = []
+            visible_count = 0
+            
             for device in devices:
                 device_id = device['device_id']
-                status = "online" if device.get("online", False) else "offline"
+                is_online = device.get("online", False)
+                status = "online" if is_online else "offline"
+                
+                if not show_offline and not is_online:
+                    continue
+                
+                visible_count += 1
                 tools_count = len(device.get("tools", []))
                 
                 device_alias = self.projection_store.get_device_alias(device_id, device.get('name'))
@@ -143,7 +177,7 @@ class BridgeServer:
                     f"• {device_id} → '{device_alias}' ({status}, {projected_count}/{tools_count} tools projected, {'enabled' if is_enabled else 'disabled'})"
                 )
             
-            summary_text = f"Found {len(devices)} devices:\n" + "\n".join(device_summary)
+            summary_text = f"Found {visible_count} devices (total known: {len(devices)}):\n" + "\n".join(device_summary)
             return [TextContent(type="text", text=summary_text)]
 
         @self.mcp.tool()
@@ -331,6 +365,11 @@ class BridgeServer:
         if not device or not device.get("tools"):
             return
         
+        # Skip offline devices - their tools should not be registered
+        if not device.get("online", False):
+            log(f"[MCP] Skipping tool registration for offline device: {device_id}")
+            return
+        
         log(f"[MCP] Registering dynamic projected tools for device {device_id}")
         
         for tool_info in device["tools"]:
@@ -364,6 +403,11 @@ class BridgeServer:
                         """Dynamically generated projected device tool function with proper schema"""
                         args = params.dict()
                         
+                        # Check online status before invoking
+                        d = self.device_store.get(device_id_copy)
+                        if d and not d.get("online", False):
+                             return [TextContent(type="text", text=f"Error: Device {device_id_copy} is offline")]
+
                         # Sanitize args
                         for k, v in args.items():
                             if isinstance(v, str) and v.strip().startswith('{'):
@@ -375,9 +419,10 @@ class BridgeServer:
                                 except:
                                     pass
 
+
                         log(f"[PROJECTED_TOOL] {projected_tool_copy['name']} ({original_tool_name_copy}) called with args: {json.dumps(args, indent=2)}")
                         
-                        ok, resp = publish_cmd(self.device_store, self.cmd_waiter, get_mqtt_pub_client(), device_id_copy, original_tool_name_copy, args)
+                        ok, resp = publish_cmd(self.device_store, self.cmd_waiter, get_mqtt_pub_client(), device_id_copy, original_tool_name_copy, args, ipc_agent=self.ipc_agent)
                         
                         if not ok:
                             error_msg = resp.get("error", {}).get("message", "Unknown error")
@@ -399,6 +444,35 @@ class BridgeServer:
             except Exception as e:
                 log(f"[MCP] Failed to register projected tool {tool_key}: {e}")
 
+    def reset_tools(self):
+        """Clear all registered tools from both internal registry and FastMCP"""
+        # 1. Clear our internal registries
+        self.tool_registry.clear_tools()
+        self._registered_virtual_tools.clear()  # Clear virtual tools tracking
+        
+        # 2. Clear FastMCP internal registry
+        # FastMCP implementation details: it likely stores tools in _tool_manager or has a list.
+        # We will try a few common patterns since we can't inspect the library easily.
+        try:
+            # Check for _tools dict
+            if hasattr(self.mcp, "_tools") and isinstance(self.mcp._tools, dict):
+                 self.mcp._tools.clear()
+                 log("[MCP] Cleared self.mcp._tools")
+            
+            # Check if it has a tool manager
+            elif hasattr(self.mcp, "_tool_manager"):
+                tm = self.mcp._tool_manager
+                if hasattr(tm, "_tools") and isinstance(tm._tools, dict):
+                    tm._tools.clear()
+                    log("[MCP] Cleared self.mcp._tool_manager._tools")
+            
+            # Re-register static tools (list_devices, etc.) because we just wiped them!
+            self.setup_tools()
+            log("[MCP] Re-registered static tools")
+            
+        except Exception as e:
+            log(f"[MCP] Warning: Failed to clear FastMCP tools: {e}")
+
     def register_all_announced_devices(self):
         """Register tools for all devices that were announced before FastMCP initialization"""
         devices = self.device_store.list()
@@ -407,3 +481,109 @@ class BridgeServer:
             device_id = device.get("device_id")
             if device_id:
                 self.register_dynamic_tools_for_device(device_id)
+
+    def register_virtual_tools(self):
+        """Register all virtual tools from the virtual tool store"""
+        if not self.virtual_tool_store or not self.virtual_tool_executor:
+            log("[MCP] Virtual tool store/executor not configured, skipping virtual tool registration")
+            return
+        
+        virtual_tools = self.virtual_tool_store.get_all_virtual_tools()
+        log(f"[MCP] Registering {len(virtual_tools)} virtual tools")
+        
+        for vt_name, vt_def in virtual_tools.items():
+            # Skip if already registered
+            if vt_name in self._registered_virtual_tools:
+                continue
+            
+            try:
+                self._register_single_virtual_tool(vt_name, vt_def)
+                self._registered_virtual_tools.add(vt_name)
+                log(f"[MCP] Registered virtual tool: {vt_name}")
+            except Exception as e:
+                log(f"[MCP] Failed to register virtual tool {vt_name}: {e}")
+    
+    def _register_single_virtual_tool(self, name: str, vt_def: dict):
+        """Register a single virtual tool with FastMCP"""
+        log(f"[MCP] _register_single_virtual_tool called for: {name}")
+        description = vt_def.get("description", f"Virtual tool: {name}")
+        bindings = vt_def.get("bindings", [])
+        log(f"[MCP] Virtual tool {name} has {len(bindings)} bindings")
+        
+        # Build parameter schema from bindings
+        schema = self.virtual_tool_store.build_virtual_tool_schema(name, self.device_store)
+        log(f"[MCP] Built schema for {name}: {schema}")
+        if not schema:
+            schema = {"type": "object", "properties": {}, "required": []}
+        
+        # If schema has no properties, create a simple version
+        if not schema.get("properties"):
+            log(f"[MCP] Schema has no properties, using kwargs fallback for {name}")
+            # Fallback: create kwargs parameter
+            schema = {
+                "type": "object",
+                "properties": {
+                    "kwargs": {
+                        "type": "object",
+                        "description": "Arguments to pass to all bound tools",
+                        "additionalProperties": True
+                    }
+                },
+                "required": []
+            }
+        
+        try:
+            ParamModel = json_schema_to_pydantic_model(f"vt_{name}_params", schema)
+            log(f"[MCP] Created ParamModel for {name}: {ParamModel}")
+        except Exception as e:
+            log(f"[MCP] Could not create param model for {name}: {e}, using simple dict")
+            # Fallback to simple kwargs
+            from pydantic import BaseModel
+            class SimpleParams(BaseModel):
+                kwargs: dict = {}
+            ParamModel = SimpleParams
+        
+        # Create the tool function
+        def create_vt_func(vt_name_copy, vt_desc_copy, executor_ref, param_model):
+            def virtual_tool_func(params: param_model) -> List[Union[ImageContent, TextContent]]:
+                """Virtual tool that executes multiple tools in parallel"""
+                args = params.dict() if hasattr(params, 'dict') else {}
+                
+                # If using kwargs wrapper, unwrap it
+                if 'kwargs' in args and len(args) == 1:
+                    args = args.get('kwargs', {})
+                
+                log(f"[VIRTUAL_TOOL] Executing {vt_name_copy} with args: {json.dumps(args, indent=2)}")
+                
+                # Execute synchronously (wrapper handles async internally)
+                result = executor_ref.execute_sync(vt_name_copy, args)
+                
+                # Format result
+                if result.get("ok"):
+                    summary = f"✓ Virtual tool '{vt_name_copy}' completed: {result['success']}/{result['total']} succeeded"
+                else:
+                    summary = f"✗ Virtual tool '{vt_name_copy}' had failures: {result['success']}/{result['total']} succeeded"
+                
+                detail_lines = [summary, ""]
+                for r in result.get("results", []):
+                    status = "✓" if r.get("ok") else "✗"
+                    detail_lines.append(f"  {status} {r['device_id']}/{r['tool']}")
+                    if not r.get("ok") and r.get("error"):
+                        detail_lines.append(f"      Error: {r['error']}")
+                
+                return [TextContent(type="text", text="\n".join(detail_lines))]
+            
+            virtual_tool_func.__name__ = vt_name_copy
+            virtual_tool_func.__doc__ = vt_desc_copy
+            return virtual_tool_func
+        
+        dynamic_func = create_vt_func(name, description, self.virtual_tool_executor, ParamModel)
+        log(f"[MCP] Created dynamic function for {name}: {dynamic_func.__name__}")
+        
+        # Register with FastMCP
+        try:
+            self.mcp.tool()(dynamic_func)
+            log(f"[MCP] Successfully registered virtual tool with FastMCP: {name}")
+        except Exception as e:
+            log(f"[MCP] FAILED to register virtual tool {name} with FastMCP: {e}")
+            raise

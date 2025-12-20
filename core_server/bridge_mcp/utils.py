@@ -55,6 +55,8 @@ def convert_response_to_content_list(resp: Dict[str, Any]) -> List[Union[ImageCo
     return content
 
 def json_schema_to_pydantic_model(name: str, schema: dict):
+    from pydantic import Field
+    
     fields = {}
     properties = schema.get("properties", {})
     required = schema.get("required", [])
@@ -75,13 +77,19 @@ def json_schema_to_pydantic_model(name: str, schema: dict):
         elif prop_schema.get("type") == "string":
             field_type = str
         
-        default_value = ...
-        if prop_name not in required:
+        # Extract description for LLM visibility
+        description = prop_schema.get("description", "")
+        
+        # Build Field with description
+        if prop_name in required:
+            # Required field
+            fields[prop_name] = (field_type, Field(..., description=description))
+        else:
+            # Optional field with default
             if "enum" in prop_schema and prop_schema["enum"]:
                 default_value = prop_schema["enum"][0]
             else:
                 default_value = None
-        
-        fields[prop_name] = (field_type, default_value)
+            fields[prop_name] = (field_type, Field(default_value, description=description))
     
     return create_model(name, **fields)

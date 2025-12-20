@@ -15,8 +15,8 @@
           "description": null
         },
         "StopLEDPattern": {
-          "enabled": true,
-          "alias": null,
+          "enabled": false,
+          "alias": "fffddd",
           "description": null
         }
       }
@@ -37,6 +37,49 @@
         },
         "StopLEDPattern": {
           "enabled": false,
+          "alias": null,
+          "description": null
+        }
+      }
+    },
+    "ipc_test_device": {
+      "enabled": true,
+      "device_alias": null,
+      "tools": {
+        "ipc_echo": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        }
+      }
+    },
+    "ipc_agent_test": {
+      "enabled": true,
+      "device_alias": null,
+      "tools": {
+        "ipc_echo": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        },
+        "add": {
+          "enabled": false,
+          "alias": null,
+          "description": null
+        }
+      }
+    },
+    "saba_audio_master": {
+      "enabled": true,
+      "device_alias": null,
+      "tools": {
+        "synthesize_speech": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        },
+        "play_audio": {
+          "enabled": true,
           "alias": null,
           "description": null
         }

@@ -32,7 +32,8 @@ class CommandWaiter:
 
 def publish_cmd(device_store: DeviceStore, cmd_waiter: CommandWaiter, mqtt_client, 
                 device_id: str, tool: str, args: Any,
-                request_id: Optional[str]=None, timeout_ms: int=CMD_TIMEOUT_MS) -> Tuple[bool, Dict[str, Any]]:
+                request_id: Optional[str]=None, timeout_ms: int=CMD_TIMEOUT_MS,
+                ipc_agent: Any = None) -> Tuple[bool, Dict[str, Any]]:
     rid = request_id or uuid.uuid4().hex
     topic = f"mcp/dev/{device_id}/cmd"
     
@@ -84,20 +85,37 @@ def publish_cmd(device_store: DeviceStore, cmd_waiter: CommandWaiter, mqtt_clien
     
     q = cmd_waiter.register(rid)
 
-    if not device_store.get(device_id):
+    device_info = device_store.get(device_id)
+    if not device_info:
         log(f"[DEBUG] Device {device_id} not found in store")
         return False, {"ok": False, "error": {"code": "unknown_device",
                                               "message": f"device_id '{device_id}' not found in announce cache"},
                        "request_id": rid}
 
-    try:
-        mqtt_client.publish(topic, json.dumps(payload), qos=1, retain=False)
-        log(f"[DEBUG] MQTT publish success to {topic}")
-    except Exception as e:
-        log(f"[DEBUG] MQTT publish failed: {e}")
-        return False, {"ok": False, "error": {"code": "mqtt_connect_failed",
-                                              "message": f"cannot connect to broker {MQTT_HOST}:{MQTT_PORT} ({e})"},
-                       "request_id": rid}
+    protocol = device_info.get("protocol", "mqtt")
+
+    if protocol == "ipc":
+        if not ipc_agent:
+            log(f"[DEBUG] Protocol is IPC but ipc_agent not provided")
+            return False, {"ok": False, "error": {"code": "config_error", "message": "ipc_agent missing"}, "request_id": rid}
+        
+        success = ipc_agent.send_cmd(device_id, payload)
+        if success:
+            log(f"[DEBUG] IPC send success to {device_id}")
+        else:
+            log(f"[DEBUG] IPC send failed to {device_id}")
+            return False, {"ok": False, "error": {"code": "ipc_send_failed", "message": "socket error"}, "request_id": rid}
+
+    else:
+        # MQTT Default
+        try:
+            mqtt_client.publish(topic, json.dumps(payload), qos=1, retain=False)
+            log(f"[DEBUG] MQTT publish success to {topic}")
+        except Exception as e:
+            log(f"[DEBUG] MQTT publish failed: {e}")
+            return False, {"ok": False, "error": {"code": "mqtt_connect_failed",
+                                                  "message": f"cannot connect to broker {MQTT_HOST}:{MQTT_PORT} ({e})"},
+                           "request_id": rid}
 
     try:
         resp = q.get(timeout=timeout_ms/1000.0)

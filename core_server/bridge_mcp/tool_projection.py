@@ -39,6 +39,10 @@ class ToolProjectionStore:
                 json.dump(self.config, f, indent=2)
         except Exception as e:
             log(f"[PROJECTION] Error saving config: {e}")
+
+    def reload_config(self):
+        """Reload configuration from disk"""
+        self.load_config()
     
     def get_device_projection(self, device_id: str) -> Dict[str, Any]:
         with self._lock:
