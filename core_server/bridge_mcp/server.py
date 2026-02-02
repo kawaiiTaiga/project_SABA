@@ -370,7 +370,7 @@ class BridgeServer:
             log(f"[MCP] Skipping tool registration for offline device: {device_id}")
             return
         
-        log(f"[MCP] Registering dynamic projected tools for device {device_id}")
+        # log(f"[MCP] Registering dynamic projected tools for device {device_id}")
         
         for tool_info in device["tools"]:
             tool_name = tool_info.get("name", "")
@@ -439,7 +439,7 @@ class BridgeServer:
                 decorated_func = self.mcp.tool()(dynamic_func)
                 self.tool_registry.set_registered_function(tool_key, decorated_func)
                 
-                log(f"[MCP] Successfully registered projected tool: {tool_key}")
+                # log(f"[MCP] Successfully registered projected tool: {tool_key}")
                 
             except Exception as e:
                 log(f"[MCP] Failed to register projected tool {tool_key}: {e}")
@@ -468,7 +468,7 @@ class BridgeServer:
             
             # Re-register static tools (list_devices, etc.) because we just wiped them!
             self.setup_tools()
-            log("[MCP] Re-registered static tools")
+            # log("[MCP] Re-registered static tools")
             
         except Exception as e:
             log(f"[MCP] Warning: Failed to clear FastMCP tools: {e}")
@@ -476,7 +476,7 @@ class BridgeServer:
     def register_all_announced_devices(self):
         """Register tools for all devices that were announced before FastMCP initialization"""
         devices = self.device_store.list()
-        log(f"[MCP] Registering tools for {len(devices)} announced devices")
+        # log(f"[MCP] Registering tools for {len(devices)} announced devices")
         for device in devices:
             device_id = device.get("device_id")
             if device_id:
@@ -499,20 +499,20 @@ class BridgeServer:
             try:
                 self._register_single_virtual_tool(vt_name, vt_def)
                 self._registered_virtual_tools.add(vt_name)
-                log(f"[MCP] Registered virtual tool: {vt_name}")
+                # log(f"[MCP] Registered virtual tool: {vt_name}")
             except Exception as e:
                 log(f"[MCP] Failed to register virtual tool {vt_name}: {e}")
     
     def _register_single_virtual_tool(self, name: str, vt_def: dict):
         """Register a single virtual tool with FastMCP"""
-        log(f"[MCP] _register_single_virtual_tool called for: {name}")
+        # log(f"[MCP] _register_single_virtual_tool called for: {name}")
         description = vt_def.get("description", f"Virtual tool: {name}")
         bindings = vt_def.get("bindings", [])
-        log(f"[MCP] Virtual tool {name} has {len(bindings)} bindings")
+        # log(f"[MCP] Virtual tool {name} has {len(bindings)} bindings")
         
         # Build parameter schema from bindings
         schema = self.virtual_tool_store.build_virtual_tool_schema(name, self.device_store)
-        log(f"[MCP] Built schema for {name}: {schema}")
+        # log(f"[MCP] Built schema for {name}: {schema}")
         if not schema:
             schema = {"type": "object", "properties": {}, "required": []}
         
@@ -534,7 +534,7 @@ class BridgeServer:
         
         try:
             ParamModel = json_schema_to_pydantic_model(f"vt_{name}_params", schema)
-            log(f"[MCP] Created ParamModel for {name}: {ParamModel}")
+            # log(f"[MCP] Created ParamModel for {name}: {ParamModel}")
         except Exception as e:
             log(f"[MCP] Could not create param model for {name}: {e}, using simple dict")
             # Fallback to simple kwargs
@@ -578,12 +578,12 @@ class BridgeServer:
             return virtual_tool_func
         
         dynamic_func = create_vt_func(name, description, self.virtual_tool_executor, ParamModel)
-        log(f"[MCP] Created dynamic function for {name}: {dynamic_func.__name__}")
+        # log(f"[MCP] Created dynamic function for {name}: {dynamic_func.__name__}")
         
         # Register with FastMCP
         try:
             self.mcp.tool()(dynamic_func)
-            log(f"[MCP] Successfully registered virtual tool with FastMCP: {name}")
+            # log(f"[MCP] Successfully registered virtual tool with FastMCP: {name}")
         except Exception as e:
             log(f"[MCP] FAILED to register virtual tool {name} with FastMCP: {e}")
             raise

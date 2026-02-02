@@ -27,7 +27,7 @@ class DynamicToolRegistry:
                     continue
                 
                 if not self.projection_store.is_tool_enabled(device_id, original_tool_name):
-                    log(f"[TOOLS] Skipping disabled tool: {original_tool_name} for device {device_id}")
+                    # log(f"[TOOLS] Skipping disabled tool: {original_tool_name} for device {device_id}")
                     continue
                 
                 projected_tool = self.projection_store.get_tool_projection(device_id, original_tool_name, tool)
@@ -45,7 +45,7 @@ class DynamicToolRegistry:
                 }
                 registered_count += 1
             
-            log(f"[TOOLS] registered {registered_count}/{len(tools)} projected tools for device {device_id}")
+            # log(f"[TOOLS] registered {registered_count}/{len(tools)} projected tools for device {device_id}")
     
     def get_tool_info(self, tool_key: str) -> Optional[Dict[str, Any]]:
         with self._lock:

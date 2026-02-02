@@ -10,7 +10,12 @@ from mcp.types import ImageContent, TextContent
 from pydantic import create_model
 
 # ---- STDERR-only logging (STDIO-safe)
+# ---- STDERR-only logging (STDIO-safe)
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+# Suppress noisy library logs
+logging.getLogger("mcp.server.fastmcp.tools.tool_manager").setLevel(logging.ERROR)
+logging.getLogger("mcp.server.fastmcp").setLevel(logging.ERROR)
+
 def log(*a, **k): print(*a, file=sys.stderr, flush=True, **k)
 
 def now_iso() -> str:

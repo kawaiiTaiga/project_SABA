@@ -76,10 +76,11 @@ def start_mqtt_listener(device_store: DeviceStore, cmd_waiter: CommandWaiter, po
                 c.subscribe(TOPIC_PORTS_DATA)
 
         def on_message(c, userdata, msg):
-            if "ports/data" not in msg.topic:
-                # Reduce log noise
-                if "status" not in msg.topic:
-                    log(f"[mqtt] RX {msg.topic}")
+            # if "ports/data" not in msg.topic:
+            #     # Reduce log noise
+            #     if "status" not in msg.topic:
+            #         # log(f"[mqtt] RX {msg.topic}")
+            #         pass
                     
             try:
                 payload = json.loads(msg.payload.decode("utf-8"))

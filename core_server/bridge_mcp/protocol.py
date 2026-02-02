@@ -80,7 +80,7 @@ class ProtocolHandler:
                 try:
                     val = float(value)
                     routed = self.port_router.route(dev_id, port_name, val)
-                    log(f"[PROTOCOL] Routed {dev_id}/{port_name} ({val}) -> {routed} targets")
+                    # log(f"[PROTOCOL] Routed {dev_id}/{port_name} ({val}) -> {routed} targets")
                     return ("routed", routed)
                 except:
                     pass

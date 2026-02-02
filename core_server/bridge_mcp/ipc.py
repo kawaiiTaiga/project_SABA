@@ -76,10 +76,10 @@ class IPCAgent:
                         payload = msg.get("payload", {})
                         
                         # DEBUG: Log all incoming messages (sample ports/data)
-                        if "ports/data" in topic:
-                            log(f"[IPC] RX ports/data: {topic} -> {payload}")
-                        elif "status" not in topic:
-                            log(f"[IPC] RX: {topic}")
+                        # if "ports/data" in topic:
+                        #     log(f"[IPC] RX ports/data: {topic} -> {payload}")
+                        # elif "status" not in topic:
+                        #     log(f"[IPC] RX: {topic}")
                         
                         # Handle Logic
                         action, result_id = self.protocol.handle_message(topic, payload, protocol="ipc", device_id_hint=device_id)

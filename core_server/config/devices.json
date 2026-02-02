@@ -263,5 +263,157 @@
     },
     "last_seen": "2025-12-07T11:20:04Z",
     "secret_token": "Av6wiuiEU95uLyp7LkxnbzjNxOvBOXoj"
+  },
+  "dev-8B52D8": {
+    "device_id": "dev-8B52D8",
+    "online": false,
+    "uptime_ms": null,
+    "rssi": null,
+    "last_status": {
+      "type": "device.status",
+      "device_id": "dev-8B52D8",
+      "online": false
+    },
+    "last_seen": "2026-02-02T15:00:38Z",
+    "name": null,
+    "version": null,
+    "http_base": "http://192.168.0.17",
+    "tools": [
+      {
+        "name": "create_pattern",
+        "description": "Create and save a LED pattern to a persistent slot (1-5). The pattern is defined by mathematical expressions for Hue, Saturation, and Brightness. Variables: theta (0~2\u03c0), t (time in seconds), i (LED index 0~11). Functions: sin, cos, tan, abs, sqrt, floor, ceil, max(a,b), min(a,b), mod(a,b), pow(a,b). Logic: (expr) ? 1.0 : 0.0 for conditionals.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "slot": {
+              "type": "integer",
+              "description": "Slot number to save to (1-5). Slot 0 is reserved."
+            },
+            "name": {
+              "type": "string",
+              "description": "Name of the pattern (e.g., 'Rainbow', 'Police')."
+            },
+            "hue": {
+              "type": "string",
+              "description": "Expression for color (0~2\u03c0 color wheel)"
+            },
+            "saturation": {
+              "type": "string",
+              "description": "Expression for saturation (0~1)"
+            },
+            "brightness": {
+              "type": "string",
+              "description": "Expression for brightness (0~1)"
+            }
+          },
+          "required": [
+            "slot",
+            "name",
+            "hue",
+            "saturation",
+            "brightness"
+          ]
+        }
+      },
+      {
+        "name": "change_slot",
+        "description": "Change device state to execute a specific pattern slot. Slot 0: Stop pattern and return to IDLE (Blinking). Slots 1-5: Execute persistent pattern. Slot 6: Blackout (Turn off all LEDs). Duration > 0: Auto-return to IDLE after time. Duration = 0: Loop forever (Default).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "slot": {
+              "type": "integer",
+              "description": "Target slot number (0-5)."
+            },
+            "duration": {
+              "type": "number",
+              "description": "Duration in seconds. 0 = Infinite loop (until changed)."
+            }
+          },
+          "required": [
+            "slot"
+          ]
+        }
+      },
+      {
+        "name": "slot_status",
+        "description": "Check the status of all pattern slots (1-5). Returns name, formulas, valid status, and active status for each slot.",
+        "parameters": {
+          "type": "object"
+        }
+      }
+    ],
+    "last_announce": {
+      "type": "device.announce",
+      "device_id": "dev-8B52D8",
+      "http_base": "http://192.168.0.17",
+      "tools": [
+        {
+          "name": "create_pattern",
+          "description": "Create and save a LED pattern to a persistent slot (1-5). The pattern is defined by mathematical expressions for Hue, Saturation, and Brightness. Variables: theta (0~2\u03c0), t (time in seconds), i (LED index 0~11). Functions: sin, cos, tan, abs, sqrt, floor, ceil, max(a,b), min(a,b), mod(a,b), pow(a,b). Logic: (expr) ? 1.0 : 0.0 for conditionals.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "slot": {
+                "type": "integer",
+                "description": "Slot number to save to (1-5). Slot 0 is reserved."
+              },
+              "name": {
+                "type": "string",
+                "description": "Name of the pattern (e.g., 'Rainbow', 'Police')."
+              },
+              "hue": {
+                "type": "string",
+                "description": "Expression for color (0~2\u03c0 color wheel)"
+              },
+              "saturation": {
+                "type": "string",
+                "description": "Expression for saturation (0~1)"
+              },
+              "brightness": {
+                "type": "string",
+                "description": "Expression for brightness (0~1)"
+              }
+            },
+            "required": [
+              "slot",
+              "name",
+              "hue",
+              "saturation",
+              "brightness"
+            ]
+          }
+        },
+        {
+          "name": "change_slot",
+          "description": "Change device state to execute a specific pattern slot. Slot 0: Stop pattern and return to IDLE (Blinking). Slots 1-5: Execute persistent pattern. Slot 6: Blackout (Turn off all LEDs). Duration > 0: Auto-return to IDLE after time. Duration = 0: Loop forever (Default).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "slot": {
+                "type": "integer",
+                "description": "Target slot number (0-5)."
+              },
+              "duration": {
+                "type": "number",
+                "description": "Duration in seconds. 0 = Infinite loop (until changed)."
+              }
+            },
+            "required": [
+              "slot"
+            ]
+          }
+        },
+        {
+          "name": "slot_status",
+          "description": "Check the status of all pattern slots (1-5). Returns name, formulas, valid status, and active status for each slot.",
+          "parameters": {
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "protocol": "mqtt",
+    "secret_token": "rm6bGB45yvVMQNYODFCD1rDQYhqmqHvg"
   }
 }

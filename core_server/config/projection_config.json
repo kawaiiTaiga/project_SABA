@@ -84,6 +84,27 @@
           "description": null
         }
       }
+    },
+    "dev-8B52D8": {
+      "enabled": true,
+      "device_alias": null,
+      "tools": {
+        "create_pattern": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        },
+        "change_slot": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        },
+        "slot_status": {
+          "enabled": true,
+          "alias": null,
+          "description": null
+        }
+      }
     }
   },
   "global": {
